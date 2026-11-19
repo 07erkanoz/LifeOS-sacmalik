@@ -620,12 +620,12 @@ ApplicationWindow {
                         color: on ? Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.2) : rolesMa.containsMouse ? Theme.cardHi : Theme.field
                         border.color: on ? Theme.user : Theme.line
                         Behavior on color { ColorAnimation { duration: 150 } }
-                        Text { id: rolesTxt; anchors.centerIn: parent; text: rolesChip.on ? "Roller açık" : "Roller"
+                        Text { id: rolesTxt; anchors.centerIn: parent; text: rolesChip.on ? "İş bölümü açık" : "İş bölümü"
                                color: rolesChip.on ? Theme.text : Theme.textDim; font.pixelSize: Theme.fs(12) }
                         MouseArea { id: rolesMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: rolesDlg.open() }
                         ToolTip.visible: rolesMa.containsMouse; ToolTip.delay: 400
-                        ToolTip.text: rolesChip.on ? "Bu sohbette roller açık. Değiştirmek ya da kapatmak için tıkla."
-                                                   : "Roller kapalı. Bu sohbet için hazır şablonla ya da elle rol belirle."
+                        ToolTip.text: rolesChip.on ? "Bu sohbette iş bölümü açık. Değiştirmek ya da kapatmak için tıkla."
+                                                   : "İş bölümü kapalı. Kim planı, kim kodu, kim görseli yapacak: bu sohbet için belirle."
                     }
                     // durum paneli: aç / kapat
                     Rectangle {
@@ -724,7 +724,7 @@ ApplicationWindow {
                         }
                     }
                     Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Bir konu aç"; color: Theme.text; font.pixelSize: Theme.fs(22); font.bold: true }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: (win.enabledAgents.length === 1 ? win.enabledAgents[0].name + " odada." : "Hepsi odada.") + (room.roles.on ? " Bu sohbette roller açık." : " Kimseye rol verilmedi."); color: Theme.muted; font.pixelSize: Theme.fs(13) }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: (win.enabledAgents.length === 1 ? win.enabledAgents[0].name + " odada." : "Hepsi odada.") + (room.roles.on ? " Bu sohbette iş bölümü var." : " Kimseye rol verilmedi."); color: Theme.muted; font.pixelSize: Theme.fs(13) }
                 }
             }
 

@@ -129,6 +129,20 @@ ROLE_TEMPLATES = [
         {"title": "Hakem", "talk": "İki tarafı tartar, neyin kanıtlandığını neyin açık kaldığını söyler.",
          "prod": "Bulguları kaynaklarıyla bir özet belgede toplar."}]},
 ]
+# İş bölümü: rollerin basit hâli. Açıklama yazılmazsa bu anlamlar kullanılır (Tartışma, Üretim).
+TASKS = [
+    {"title": "Plan", "talk": "Planın taslağını hazırlar; diğerleri itiraz edebilir, karar yine açık destekle alınır.",
+     "prod": "Plan belgesini yazar ve günceller."},
+    {"title": "Kod", "talk": "Teknik yaklaşımı ve kodun yapısını önerir.",
+     "prod": "Kodu yazar; başkasının kodunu değiştirecekse önce sahibine önerir."},
+    {"title": "Görsel", "talk": "Görsel yönü, üslubu ve kaliteyi önerir.", "prod": "Görselleri üretir."},
+    {"title": "Ses", "talk": "Ses, efekt ve müzik yönünü önerir.", "prod": "Sesleri ve müziği üretir."},
+    {"title": "Test", "talk": "Kırılabilecek yerleri ve eksik durumları arar.",
+     "prod": "Yapılanı dener, testleri yazar ve sonuçları bildirir."},
+    {"title": "Belge", "talk": "Belgelerin içeriğini ve düzenini önerir.", "prod": "Belgeleri yazar."},
+    {"title": "Araştırma", "talk": "Kaynakları ve verileri araştırıp getirir.", "prod": "Bulguları kaynaklarıyla derler."},
+]
+TASK_BY_TITLE = {x["title"].lower(): x for x in TASKS}
 # üretilen dosyalar: panelde türüne göre ayrılır
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "mp4", "webm", "mov", "mkv", "ogv"}
 CODE_EXT = {"py", "js", "mjs", "ts", "tsx", "jsx", "dart", "qml", "c", "cc", "cpp", "h", "hpp", "rs", "go", "java",
@@ -577,6 +591,10 @@ class Room(QObject):
         self.statusChanged.emit()
 
     # ================= roller =================
+    @Property("QVariantList", constant=True)
+    def tasks(self):
+        return TASKS
+
     @Property("QVariantList", notify=rolesChanged)
     def roleTemplates(self):
         """Hazır şablonlar ve kullanıcının kaydettikleri (own: true, silinebilir)."""
@@ -642,18 +660,32 @@ class Room(QObject):
         who = self._s["userName"]
         if on:
             prod = bool(self._s.get("production"))
-            parts = []
-            for x in lst:
-                d = x["prod"] if prod and x["prod"] else x["talk"] or x["prod"]
-                parts.append(f"**{x['title'] or 'Rol'}** — {self._names(x['agents'])}" + (f": {d}" if d else ""))
-            text = (f"🎭 {who} roller belirledi. Roller yetki değil, sorumluluk alanıdır; ortak karar kuralı aynen sürer.\n"
-                    + "\n".join("- " + p for p in parts))
+            if not any(x["talk"] or x["prod"] for x in lst):
+                # yalnız iş bölümü: tek satır
+                parts = "; ".join(f"{x['title']}: {self._names(x['agents'])}" for x in lst)
+                text = (f"🎭 {who} iş bölümü yaptı. {parts}. İş bölümü yetki değil, sorumluluk alanıdır; "
+                        "ortak karar kuralı aynen sürer.")
+            else:
+                parts = []
+                for x in lst:
+                    d = x["prod"] if prod and x["prod"] else x["talk"] or x["prod"]
+                    parts.append(f"**{x['title'] or 'Rol'}** — {self._names(x['agents'])}" + (f": {d}" if d else ""))
+                text = (f"🎭 {who} iş bölümü yaptı. İşler yetki değil, sorumluluk alanıdır; ortak karar kuralı aynen sürer.\n"
+                        + "\n".join("- " + p for p in parts))
         else:
-            text = f"🎭 {who} rolleri kapattı: kimsenin rolü yok."
+            text = f"🎭 {who} iş bölümünü kapattı: kimsenin işi ya da rolü yok."
         self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, text, True, 0, emit=True)
         self._save_chat()
         self.rolesChanged.emit()
-        self.statusText.emit("Roller kaydedildi" if on else "Roller kapatıldı")
+        self.statusText.emit("İş bölümü kaydedildi" if on else "İş bölümü kapatıldı")
+
+    @staticmethod
+    def _with_meaning(x):
+        """Açıklaması yazılmamış hazır iş (Plan, Kod…): varsayılan anlamıyla."""
+        t = TASK_BY_TITLE.get((x.get("title") or "").strip().lower())
+        if t and not (x.get("talk") or x.get("prod")):
+            return dict(x, talk=t["talk"], prod=t["prod"])
+        return x
 
     def _names(self, keys):
         ns = [a["name"] for a in self._s["agents"] if a["key"] in keys]
@@ -668,19 +700,20 @@ class Room(QObject):
             return []
         prod = bool(self._s.get("production"))
         def desc(x):
+            x = self._with_meaning(x)
             d = x.get("prod") if prod and x.get("prod") else x.get("talk") or x.get("prod") or ""
             return (x.get("title") or "rol") + (f" ({d})" if d else "")
         k = agent["key"]
         mine = [x for x in r["list"] if k in x["agents"]]
-        out = [f"{self._s['userName']} bu sohbet için roller belirledi. Roller yetki değil sorumluluk alanıdır; "
+        out = [f"{self._s['userName']} bu sohbet için iş bölümü yaptı. İşler yetki değil sorumluluk alanıdır; "
                "kimse yönetici değildir, ortak karar yine açık destekle alınır."]
         for x in mine:
             mates = [a for a in x["agents"] if a != k]
-            out.append("Senin rolün: " + desc(x) + (f"; bu rolü {self._names(mates)} ile paylaşıyorsun." if mates else "."))
+            out.append("Senin işin: " + desc(x) + (f"; bu işi {self._names(mates)} ile paylaşıyorsun." if mates else "."))
         others = [f"{self._names([a for a in x['agents'] if a != k])}: {desc(x)}" for x in r["list"]
                   if x not in mine]
         if others:
-            out.append("Diğer roller: " + "; ".join(others) + ".")
+            out.append("Diğerlerinin işleri: " + "; ".join(others) + ".")
         return out
 
     @Slot(str, bool, float, result=str)
