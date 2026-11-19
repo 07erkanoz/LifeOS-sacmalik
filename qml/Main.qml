@@ -53,12 +53,27 @@ ApplicationWindow {
         for (var i = 0; i < q.length; i++) if ((q[i].name === "5h" || q[i].name === "week") && q[i].used >= 100) return true
         return false
     }
+    function togglePanel() { var s = cfg; s.panelOpen = !(cfg.panelOpen !== false); room.saveSettings(s)
+                             win.status = s.panelOpen ? "Durum paneli açık" : "Durum paneli gizlendi" }
+    Shortcut { sequence: "Ctrl+B"; onActivated: win.togglePanel() }
     function setTheme(t) {
         fade.color = Theme.bg; fadeAnim.restart()       // eski renkten yenisine yumuşak geçiş
         var s = cfg; s.theme = t; room.saveSettings(s)
     }
 
     property var cfg: room.settings
+    function shortModel(m) {
+        if (!m) return ""
+        return m.replace(/^claude-/, "").replace(/-(\d+)-(\d+)$/, " $1.$2").replace(/^gemini-/, "")
+    }
+    // ajanın bu sohbetteki rolleri ("Görsel ve sahne · Eleştirmen")
+    function rolesOf(key) {
+        var r = room.roles
+        if (!r.on) return ""
+        return r.list.filter(function(x) { return x.agents.indexOf(key) >= 0 }).map(function(x) { return x.title || "rol" }).join(" · ")
+    }
+    function countWord(n) { return ["hiç", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"][n] || String(n) }
+    readonly property var enabledAgents: (cfg.agents || []).filter(function(a) { return a.enabled })
     readonly property string chatTitle: {
         var cs = room.chats
         for (var i = 0; i < cs.length; i++) if (cs[i].id === room.currentChat) return cs[i].title
@@ -276,7 +291,7 @@ ApplicationWindow {
                     ColumnLayout {
                         spacing: 0
                         Text { text: "Saçmalık Odası"; color: Theme.text; font.pixelSize: Theme.fs(16); font.weight: Font.Bold; font.letterSpacing: -0.2 }
-                        Text { text: "sen + üç yapay zekâ"; color: Theme.muted; font.pixelSize: Theme.fs(11) }
+                        Text { text: "sen + " + win.countWord(win.cfg.agents.filter(function(a) { return a.enabled }).length) + " yapay zekâ"; color: Theme.muted; font.pixelSize: Theme.fs(11) }
                     }
                 }
 
@@ -449,11 +464,14 @@ ApplicationWindow {
                 TapHandler { onDoubleTapped: win.toggleMax() }
                 Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.lineSoft }
                 RowLayout {
+                    id: topRow
                     anchors.fill: parent
                     anchors.leftMargin: 24; anchors.rightMargin: 18
                     spacing: 8
+                    readonly property bool tight: width < 1060      // panel açıkken: düğmeler kısalır, başlık sığar
                     ColumnLayout {
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 120
                         spacing: 2
                         Text { text: win.chatTitle; color: Theme.text; font.pixelSize: Theme.fs(15); font.weight: Font.DemiBold
                                Layout.fillWidth: true; elide: Text.ElideRight }
@@ -520,14 +538,16 @@ ApplicationWindow {
                     }
 
                     GhostButton {
+                        visible: !topRow.tight
                         text: "📁  " + cfg.workDir.replace(/^.*\//, "")
                         enabled: !room.busy
-                        implicitWidth: Math.min(220, contentItem.implicitWidth + 24)
+                        implicitWidth: Math.min(topRow.tight ? 120 : 220, contentItem.implicitWidth + 24)
                         onClicked: win.pickFolder()
                         ToolTip.visible: hovered; ToolTip.text: "Proje klasörü: " + cfg.workDir + "\nDeğiştirmek için tıkla"
                     }
 
                     Text {
+                        visible: !topRow.tight
                         text: "Tur ⓘ"; color: Theme.muted; font.pixelSize: Theme.fs(12)
                         MouseArea { id: turTip; anchors.fill: parent; hoverEnabled: true }
                         ToolTip.visible: turTip.containsMouse
@@ -535,11 +555,14 @@ ApplicationWindow {
                     }
                     SpinBox {
                         id: rounds
+                        visible: !topRow.tight
                         enabled: !cfg.autoMode
                         opacity: enabled ? 1 : 0.35
                         from: 1; to: 20
                         value: cfg.autoRounds
-                        implicitWidth: 104; implicitHeight: 32
+                        implicitWidth: topRow.tight ? 88 : 104; implicitHeight: 32
+                        ToolTip.visible: hovered && topRow.tight; ToolTip.delay: 400
+                        ToolTip.text: "Tur: sen yazdıktan sonra ajanların kaç kez konuşacağı"
                         onValueModified: { var s = cfg; s.autoRounds = value; room.saveSettings(s) }
                         contentItem: Text {
                             text: rounds.value; color: Theme.text; font.pixelSize: Theme.fs(13)
@@ -560,7 +583,7 @@ ApplicationWindow {
                         Text {
                             id: autoTxt
                             anchors.centerIn: parent
-                            text: "∞  Oto"
+                            text: topRow.tight ? "∞" : "∞  Oto"
                             color: autoChip.on ? Theme.text : Theme.textDim
                             font.pixelSize: Theme.fs(12); font.weight: autoChip.on ? Font.DemiBold : Font.Normal
                         }
@@ -579,10 +602,45 @@ ApplicationWindow {
                                                                  : "Oto kapalı" }
                         }
                         ToolTip.visible: autoMa.containsMouse; ToolTip.delay: 300
+                        Layout.preferredWidth: implicitWidth
                         ToolTip.text: "Açıkken ajanlar senin müdahalen olmadan konuşmaya devam eder.\nDurdurmak için ■ Durdur. Araya istediğin an yazabilirsin."
                     }
-                    GhostButton { text: "▶  Bir tur daha"; enabled: !room.busy && msgs.count > 0; onClicked: room.nextRound() }
-                    GhostButton { text: "■  Durdur"; enabled: room.busy; accent: "#ef4444"; onClicked: room.stop() }
+                    GhostButton { text: topRow.tight ? "▶" : "▶  Bir tur daha"; implicitWidth: topRow.tight ? 34 : implicitContentWidth + 24
+                                  enabled: !room.busy && msgs.count > 0; onClicked: room.nextRound()
+                                  ToolTip.visible: hovered && topRow.tight; ToolTip.text: "Bir tur daha" }
+                    GhostButton { text: topRow.tight ? "■" : "■  Durdur"; implicitWidth: topRow.tight ? 34 : implicitContentWidth + 24
+                                  enabled: room.busy; accent: "#ef4444"; onClicked: room.stop()
+                                  ToolTip.visible: hovered && topRow.tight; ToolTip.text: "Hepsini durdur" }
+
+                    // roller: ön tanımlı olarak kapalı; açıkken renkli
+                    Rectangle {
+                        id: rolesChip
+                        readonly property bool on: room.roles.on
+                        implicitWidth: rolesTxt.implicitWidth + 22; implicitHeight: 32; radius: 8
+                        color: on ? Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.2) : rolesMa.containsMouse ? Theme.cardHi : Theme.field
+                        border.color: on ? Theme.user : Theme.line
+                        Behavior on color { ColorAnimation { duration: 150 } }
+                        Text { id: rolesTxt; anchors.centerIn: parent; text: rolesChip.on ? "Roller açık" : "Roller"
+                               color: rolesChip.on ? Theme.text : Theme.textDim; font.pixelSize: Theme.fs(12) }
+                        MouseArea { id: rolesMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: rolesDlg.open() }
+                        ToolTip.visible: rolesMa.containsMouse; ToolTip.delay: 400
+                        ToolTip.text: rolesChip.on ? "Bu sohbette roller açık. Değiştirmek ya da kapatmak için tıkla."
+                                                   : "Roller kapalı. Bu sohbet için hazır şablonla ya da elle rol belirle."
+                    }
+                    // durum paneli: aç / kapat
+                    Rectangle {
+                        id: panelBtn
+                        implicitWidth: 34; implicitHeight: 34; radius: 9
+                        color: panelMa.containsMouse ? Theme.cardHi : cfg.panelOpen !== false ? Theme.field : "transparent"
+                        border.color: Theme.lineSoft
+                        Rectangle { anchors.centerIn: parent; width: 16; height: 13; radius: 3; color: "transparent"
+                                    border.color: cfg.panelOpen !== false ? Theme.text : Theme.muted; border.width: 1.4
+                            Rectangle { x: parent.width - 6; y: 1; width: 1.4; height: parent.height - 2; color: parent.border.color }
+                            Rectangle { visible: cfg.panelOpen !== false; x: parent.width - 4.6; y: 1.5; width: 3.2; height: parent.height - 3; radius: 1; color: Qt.rgba(parent.border.color.r, parent.border.color.g, parent.border.color.b, 0.5) } }
+                        MouseArea { id: panelMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: win.togglePanel() }
+                        ToolTip.visible: panelMa.containsMouse; ToolTip.delay: 400
+                        ToolTip.text: cfg.panelOpen !== false ? "Durum panelini gizle" : "Durum panelini göster"
+                    }
 
                     // tema: güneş / ay, dönerek değişir
                     Rectangle {
@@ -666,7 +724,7 @@ ApplicationWindow {
                         }
                     }
                     Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Bir konu aç"; color: Theme.text; font.pixelSize: Theme.fs(22); font.bold: true }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Üçü de odada. Kimseye rol verilmedi."; color: Theme.muted; font.pixelSize: Theme.fs(13) }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: (win.enabledAgents.length === 1 ? win.enabledAgents[0].name + " odada." : "Hepsi odada.") + (room.roles.on ? " Bu sohbette roller açık." : " Kimseye rol verilmedi."); color: Theme.muted; font.pixelSize: Theme.fs(13) }
                 }
             }
 
@@ -811,12 +869,24 @@ ApplicationWindow {
                     id: hint
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.top: composer.bottom; anchors.topMargin: 8
-                    text: "Enter gönderir · Shift+Enter yeni satır · 📎 ya da Ctrl+V ile resim ve dosya · @claude, @codex, @agy ile yalnızca birine söz ver"
+                    text: "Enter gönderir · Shift+Enter yeni satır · 📎 ya da Ctrl+V ile resim ve dosya · " + win.enabledAgents.map(function(a) { return "@" + a.name.toLowerCase() }).join(", ") + " ile yalnızca birine söz ver"
+                    width: Math.min(implicitWidth, parent.width - 40); elide: Text.ElideRight
                     color: Theme.muted; font.pixelSize: Theme.fs(11)
                 }
             }
         }
+
+        // ---------------- sağ: durum paneli ----------------
+        StatusPanel {
+            Layout.fillHeight: true
+            Layout.preferredWidth: implicitWidth
+            // dar pencerede yalnız şerit: sohbet sığsın
+            open: cfg.panelOpen !== false && win.width >= 1100
+            onToggle: if (win.width >= 1100) win.togglePanel(); else win.status = "Paneli açmak için pencereyi genişletin"
+        }
     }
+
+    RolesDialog { id: rolesDlg }
 
     Dialog {
         id: delDlg

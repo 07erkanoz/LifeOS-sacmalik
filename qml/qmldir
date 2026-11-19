@@ -5,3 +5,5 @@ MessageBubble 1.0 MessageBubble.qml
 SettingsDrawer 1.0 SettingsDrawer.qml
 Field 1.0 Field.qml
 Picker 1.0 Picker.qml
+StatusPanel 1.0 StatusPanel.qml
+RolesDialog 1.0 RolesDialog.qml

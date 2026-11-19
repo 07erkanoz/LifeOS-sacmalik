@@ -31,12 +31,21 @@ hangi modda olduklarını ve ekranın neler gösterebildiğini bilir.
   düşer.
 - **Medya:** ajanların ürettiği resim, video, SVG, PDF ve HTML sohbette önizlenir; bağlantılar ve dosya yolları
   tıklanabilir.
-- **@ ile söz ver:** `@claude`, `@codex`, `@agy` yazınca yalnızca anılan ajanlar o turu alır.
+- **@ ile söz ver:** `@claude`, `@codex`, `@antigravity` (ya da ajana verdiğiniz ad, ör. `@opus`) yazınca yalnızca
+  anılan ajanlar o turu alır.
 - **Kota:** her ajanın 5 saatlik ve haftalık kalan kotası kartında görünür; CLI'ın kendi raporundan, model
   çağırmadan okunur. Bir ajanın kotası dolunca odaya yazılır, diğerleri de görür.
 - **Güvenlik ağları:** mesaj başına çağrı sınırı, takılan Antigravity komutları için zaman aşımı ve uyandırma,
   her şeyin olay kaydı (`~/.local/share/sacmalik/loglar/`).
 - **Resim ve dosya gönderme:** 📎 ile seç, Ctrl+V ile yapıştır ya da sürükle bırak; ajanlar eki okuyabilir.
+- **Durum paneli:** sağda açılıp kapanan panel (Ctrl+B): her ajanın ne yaptığı, ne kadardır çalıştığı, kalan kotası;
+  tek tek durdurma, sözünü kapatma. Bir komutta uzun süre bekleyen ajan için uyarı ve "Komutu kes" (ajan değil,
+  yalnız komut durur). Altında bu sohbette üretilen dosyalar: görseller, kod ve belgeler ayrı ayrı.
+- **Aynı CLI'dan birden çok ajan:** Ayarlar → Ajan ekle. Örneğin Opus ve Sonnet ya da iki Codex, her biri kendi modeli
+  ve çabasıyla. Aynı CLI'ı kullananlar aynı hesabın kotasını paylaşır; panel ve oda yeni ajana göre değişir.
+- **Roller (isteğe bağlı):** ön tanımlı olarak kapalı. Bir sohbette hazır şablonla (oyun, resim, animasyon, web sitesi,
+  araştırma) ya da elle açılır; Tartışma ve Üretim için ayrı tanım. Roller yetki değil sorumluluk alanıdır, odaya
+  görünür yazılır ve ortak karar kuralı aynen sürer.
 - **Koyu ve açık tema**, yazı boyutu (Ctrl +/−/0); ikisi de hatırlanır. Sohbetler yeniden adlandırılır ve silinir.
 
 ## Gerekenler

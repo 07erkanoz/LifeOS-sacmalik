@@ -13,7 +13,7 @@ Drawer {
 
     onAboutToShow: {
         draft = JSON.parse(JSON.stringify(room.settings)); tests = {}
-        for (var i = 0; i < draft.agents.length; i++) room.fetchModels(draft.agents[i].key)
+        for (var i = 0; i < draft.agents.length; i++) room.fetchModelsFor(draft.agents[i].key, draft.agents[i].command)
     }
 
     // yeni nesne üret ki bağlamalar (seçili effort/renk vb.) güncellensin
@@ -22,6 +22,17 @@ Drawer {
         ag[i] = Object.assign({}, ag[i]); ag[i][k] = v
         var nd = Object.assign({}, draft); nd.agents = ag
         draft = nd
+    }
+
+    // aynı CLI'dan bir ajan daha: başka model ya da çaba (Opus ve Sonnet, iki Codex…)
+    function addAgent(kind) {
+        var a = room.newAgent(kind, draft.agents)
+        var nd = Object.assign({}, draft); nd.agents = draft.agents.concat([a]); draft = nd
+        room.fetchModelsFor(a.key, a.command)
+        Qt.callLater(function() { scroller.ScrollBar.vertical.position = 1 - scroller.ScrollBar.vertical.size })
+    }
+    function removeAgent(i) {
+        var nd = Object.assign({}, draft); nd.agents = draft.agents.slice(); nd.agents.splice(i, 1); draft = nd
     }
 
     Connections {
@@ -56,6 +67,7 @@ Drawer {
         }
 
         ScrollView {
+            id: scroller
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: availableWidth
@@ -181,7 +193,7 @@ Drawer {
                         Text {
                             Layout.fillWidth: true; wrapMode: Text.WordWrap
                             color: Theme.muted; font.pixelSize: Theme.fs(11)
-                            text: "Üç ajan da bu klasörde çalışır; dosya üretirlerse buraya yazarlar. Ajanlara giden tek şey: konum, odadakiler ve \"Ad: mesaj\" dökümü. Rol, kural, talimat yok."
+                            text: "Bütün ajanlar bu klasörde çalışır; dosya üretirlerse buraya yazarlar. Ajanlara giden: kısa bir oda bilgisi (konum, odadakiler, mod) ve \"Ad: mesaj\" dökümü. Rol ön tanımlı olarak yok; bir sohbette açarsanız (üst çubukta Roller) odaya görünür yazılır."
                         }
                     }
                 }
@@ -219,6 +231,11 @@ Drawer {
                                            color: card.a.found ? "#3ddc84" : "#ef4444" }
                                 }
                                 Item { Layout.fillWidth: true }
+                                GhostButton {
+                                    visible: d.draft.agents.length > 1
+                                    text: "Kaldır"; accent: "#ef4444"; implicitHeight: 28
+                                    onClicked: d.removeAgent(card.index)
+                                }
                                 Switch {
                                     checked: card.a.enabled
                                     onToggled: d.setAgent(card.index, "enabled", checked)
@@ -316,6 +333,28 @@ Drawer {
                                 Text { id: outTxt; x: 8; y: 8; width: parent.width - 16; wrapMode: Text.WrapAnywhere
                                        text: card.t ? (card.t.out || "") : ""; color: Theme.textDim
                                        font.family: "monospace"; font.pixelSize: Theme.fs(11) }
+                            }
+                        }
+                    }
+                }
+
+                // ---- ajan ekle ----
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: addCol.implicitHeight + 28
+                    radius: 14; color: "transparent"; border.color: Theme.line
+                    ColumnLayout {
+                        id: addCol
+                        anchors.fill: parent; anchors.margins: 14
+                        spacing: 10
+                        Text { text: "AJAN EKLE"; color: Theme.muted; font.pixelSize: Theme.fs(10); font.letterSpacing: 1.5 }
+                        Text { Layout.fillWidth: true; wrapMode: Text.WordWrap; color: Theme.textDim; font.pixelSize: Theme.fs(12)
+                               text: "Aynı CLI'dan bir ajan daha ekleyin; modelini ve çabasını ayrı seçin (ör. Opus ve Sonnet, iki Codex). Aynı CLI'ı kullananlar aynı hesabın kotasını paylaşır. Kaydet'e basınca odaya ve sağdaki panele girer." }
+                        RowLayout {
+                            spacing: 8
+                            Repeater {
+                                model: [["claude", "Claude", "#d97757"], ["codex", "Codex", "#10a37f"], ["agy", "Antigravity", "#4f8cff"]]
+                                GhostButton { text: "＋  " + modelData[1]; accent: modelData[2]; onClicked: d.addAgent(modelData[0]) }
                             }
                         }
                     }

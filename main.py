@@ -30,7 +30,7 @@ from PySide6.QtGui import QFont, QGuiApplication, QIcon, QTextDocument
 from PySide6.QtQml import QQmlApplicationEngine
 
 APP_DIR = Path(__file__).resolve().parent
-CONFIG_DIR = Path.home() / ".config" / "sacmalik"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "sacmalik"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
 # Kullanıcı verisi program klasöründe değil: paketle kurulunca program /usr/lib altında, salt okunur durur.
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "sacmalik"
@@ -87,7 +87,57 @@ def is_ack(text):
 
 LIMIT_ERROR = re.compile(r"rate.?limit|usage limit|quota|limit reached|hit your limit|resource.?exhausted|\b429\b|kota", re.I)
 CLASH_SECS = 600    # aynı dosyaya bu süre içinde ikinci bir ajan yazarsa odaya uyarı düşer
-HEADER_VER = 6      # oda bilgisi değişince sürmekte olan oturumlara da bir kez gönderilir
+HEADER_VER = 7      # oda bilgisi değişince sürmekte olan oturumlara da bir kez gönderilir
+# Ajanın mesajının başında oda bilgisinin kopyası ("**Konum:** … **Odadakiler:** …"): Gemini bunu rapor
+# kalıbı sanıp her mesajına koyuyordu. Bu satırlar odaya düşmeden silinir.
+ECHO_LINE = re.compile(r"^\s*(?:[-*>]\s*)?(?:\*\*|__)?(Konum|Odadakiler|Mod|Ekran|Çalışma klasörü)\s*:?\s*(?:\*\*|__)?\s*:?.*$", re.I)
+# Roller (19.11.2026): ön tanımlı olarak kapalı; açılınca yetki değil sorumluluk alanıdır, ortak karar kuralı sürer.
+ROLE_TEMPLATES = [
+    {"id": "oyun", "name": "Oyun", "roles": [
+        {"title": "Görsel ve sahne", "talk": "Önce görsel açıdan değerlendirir: sahne, ışık, kamera, taş ve arka plan kalitesi.",
+         "prod": "Sahneyi, görselleri ve animasyon parçalarını üretir."},
+        {"title": "Kurallar ve motor", "talk": "Oyun kurallarını, çözülebilirliği ve teknik riskleri tartar.",
+         "prod": "Oyun motorunu, kuralları ve testlerini yazar."},
+        {"title": "Eleştirmen", "talk": "Önerilerin zayıf yanlarını arar, oyuncu gözüyle sorar.",
+         "prod": "Yapılanı dener, hataları ve tutarsızlıkları bildirir; kendi düzeltmesini sahibine önerir."}]},
+    {"id": "resim", "name": "Resim", "roles": [
+        {"title": "Sanat yönetmeni", "talk": "Konsepti, renk paletini, kompozisyonu ve üslubu belirlemeyi önerir.",
+         "prod": "Kısa bir görsel yönerge yazar, üretilenleri bu yönergeye göre değerlendirir."},
+        {"title": "Üretici", "talk": "Önerilen üslubun nasıl üretileceğini ve araçlarını tartar.",
+         "prod": "Resimleri üretir ve dosya olarak kaydeder."},
+        {"title": "Kalite denetçisi", "talk": "Tutarlılık, ışık, anatomi ve ayrıntı hatalarını arar.",
+         "prod": "Her resmi kontrol eder, düzeltilecekleri tek tek yazar."}]},
+    {"id": "animasyon", "name": "Animasyon", "roles": [
+        {"title": "Hikâye ve storyboard", "talk": "Akışı, sahneleri ve zamanlamayı önerir.",
+         "prod": "Storyboard ve sahne listesini hazırlar."},
+        {"title": "Hareket ve zamanlama", "talk": "Hareketin, geçişlerin ve ritmin nasıl olacağını tartar.",
+         "prod": "Animasyonları ve geçişleri üretir."},
+        {"title": "Render ve son kontrol", "talk": "Çıktı biçimini, kaliteyi ve süreyi değerlendirir.",
+         "prod": "Render alır, sonucu izler ve hataları bildirir."}]},
+    {"id": "web", "name": "Web sitesi", "roles": [
+        {"title": "Tasarım", "talk": "Sayfa yapısını, görünümü ve kullanıcı akışını önerir.",
+         "prod": "Arayüzü ve stilleri yazar."},
+        {"title": "Sunucu tarafı", "talk": "Veri, API ve güvenlik konularını tartar.",
+         "prod": "Sunucu tarafını ve veri katmanını yazar."},
+        {"title": "Test", "talk": "Kırılabilecek yerleri ve eksik durumları arar.",
+         "prod": "Testleri yazar ve çalıştırır, sonuçları bildirir."}]},
+    {"id": "arastirma", "name": "Araştırma", "roles": [
+        {"title": "Savunan", "talk": "Önerinin lehindeki en güçlü gerekçeleri ve kanıtları getirir.",
+         "prod": "Lehteki kaynakları ve verileri toplar."},
+        {"title": "Karşı çıkan", "talk": "Önerinin aleyhindeki en güçlü gerekçeleri ve kanıtları getirir.",
+         "prod": "Aleyhteki kaynakları ve verileri toplar."},
+        {"title": "Hakem", "talk": "İki tarafı tartar, neyin kanıtlandığını neyin açık kaldığını söyler.",
+         "prod": "Bulguları kaynaklarıyla bir özet belgede toplar."}]},
+]
+# üretilen dosyalar: panelde türüne göre ayrılır
+IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "mp4", "webm", "mov", "mkv", "ogv"}
+CODE_EXT = {"py", "js", "mjs", "ts", "tsx", "jsx", "dart", "qml", "c", "cc", "cpp", "h", "hpp", "rs", "go", "java",
+            "kt", "swift", "sh", "bash", "zsh", "css", "scss", "html", "htm", "vue", "svelte", "lua", "rb", "php",
+            "sql", "glsl", "frag", "vert", "cs", "gd"}
+DOC_EXT = {"md", "txt", "pdf", "json", "yaml", "yml", "toml", "csv", "tsv", "docx", "odt", "xlsx", "ods", "rtf",
+           "udf", "xml", "mp3", "wav", "ogg", "flac"}
+SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
+STUCK_SECS = 240        # bir komut bu kadar sürerse panel "takılmış olabilir" der
 # sohbette gösterilecek ajan çıktıları: resimler önizlenir, diğerleri tıklayınca açılır
 MEDIA_EXT = ("png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif",
              "mp4", "webm", "mov", "mkv", "ogv", "mp3", "wav", "ogg", "html", "htm", "pdf")
@@ -172,6 +222,8 @@ DEFAULTS = {
     "leanTools": True,      # ajanlar kişisel bağlayıcı/MCP sunucuları olmadan açılır (gizlilik, daha az araç tanımı)
    
     "theme": "dark",
+    "panelOpen": True,      # sağdaki durum paneli açık mı (hatırlanır)
+    "roleTemplates": [],    # kullanıcının kaydettiği rol şablonları: [{id, name, roles: [{title, talk, prod}]}]
     "fontScale": 1.0,       # yazı boyutu çarpanı (0.8–1.6)        # "dark" ya da "light"; üst çubuktaki düğmeyle değişir, hatırlanır
     "keepSessions": True,
     "workDir": str(DATA_DIR / "oda"),
@@ -197,9 +249,9 @@ def load_settings():
     try:
         saved = json.loads(CONFIG_FILE.read_text())
         data.update({k: v for k, v in saved.items() if k in DEFAULTS})
-        base = {a["key"]: a for a in DEFAULTS["agents"]}
         for a in data["agents"]:
-            for k, v in base.get(a.get("key"), DEFAULTS["agents"][0]).items():
+            # eksik alanlar aynı CLI'ın varsayılanından: eklenen ikinci Claude, Antigravity'ninkini almasın
+            for k, v in base_agent(a).items():
                 a.setdefault(k, v if k not in ("model", "effort", "allowRules") else "")
     except (OSError, ValueError):
         pass
@@ -207,14 +259,67 @@ def load_settings():
 
 
 def exe_of(agent):
-    parts = shlex.split(agent.get("command") or "")
+    try:
+        parts = shlex.split(agent.get("command") or "")
+    except ValueError:
+        return ""
     return os.path.basename(parts[0]) if parts else ""
+
+
+def kind_of(agent):
+    """Ajanın CLI türü: claude, codex ya da agy. Aynı türden birden çok ajan aynı hesabı (ve kotayı) kullanır."""
+    exe = exe_of(agent)
+    if exe in ("agy", "antigravity"):
+        return "agy"
+    if exe in ("claude", "codex"):
+        return exe
+    key = (agent.get("key") or "").split("-")[0]
+    return key if key in ("agy", "claude", "codex") else exe
+
+
+def base_agent(agent):
+    kind = kind_of(agent)
+    return next((d for d in DEFAULTS["agents"] if d["key"] == kind),
+                next((d for d in DEFAULTS["agents"] if d["key"] == agent.get("key")), DEFAULTS["agents"][0]))
+
+
+def file_kind(path):
+    ext = path.lower().rsplit(".", 1)[-1] if "." in os.path.basename(path) else ""
+    return "image" if ext in IMG_EXT else "code" if ext in CODE_EXT else "doc" if ext in DOC_EXT else ""
+
+
+def strip_echo(text, me, others):
+    """Ajanın mesajından oda bilgisi kopyasını ve kendi adıyla açılışını sil; başka ajanın adıyla açıyorsa notu döndür.
+    → (temiz metin, not)"""
+    lines = (text or "").split("\n")
+    head = lines[:10]
+    hits = [i for i, ln in enumerate(head) if ECHO_LINE.match(ln)]
+    if len(hits) >= 2:
+        lines = [ln for i, ln in enumerate(lines) if i not in hits]
+        while len(lines) > 1 and not lines[0].strip() and not lines[1].strip():
+            lines.pop(0)
+        # başlık ile gövde arasında kalan boş satırlar ve "---" çizgisi
+        i = 0
+        while i < len(lines) and (not lines[i].strip() or lines[i].strip("-—*_ ") == ""):
+            i += 1
+        if i and i < len(lines):
+            lines = lines[i:]
+    text = "\n".join(lines).strip()
+    note = ""
+    m = re.match(r"^\s*(?:\*\*|__)?([^\n*_:]{2,40}?)(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*", text)
+    if m:
+        who = m.group(1).strip()
+        if who.lower() == (me or "").lower():
+            text = text[m.end():].lstrip()
+        elif any(who.lower() == o.lower() for o in others):
+            note = f"Bu mesajı {me} yazdı; {who} adıyla başlıyor"
+    return text, note
 
 
 def new_chat(workdir):
     return {"id": time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6],
             "title": "", "created": time.time(), "updated": time.time(),
-            "workDir": workdir, "messages": [], "sessions": {}, "seen": {}}
+            "workDir": workdir, "messages": [], "sessions": {}, "seen": {}, "files": {}}
 
 
 def short(s, n=90):
@@ -240,6 +345,9 @@ class Room(QObject):
     statusText = Signal(str)
     testResult = Signal(str, bool, str)                     # key, ok, output
     modelsReady = Signal(str, "QVariantList", "QVariantList")  # key, models, efforts
+    statusChanged = Signal()                                # ajanların anlık durumu (panel)
+    filesChanged = Signal()                                 # bu sohbette üretilen dosyalar (panel)
+    rolesChanged = Signal()
 
     def __init__(self):
         super().__init__()
@@ -259,8 +367,12 @@ class Room(QObject):
         self._watch = QTimer(self)     # takılan ajan komutlarının bekçisi
         self._watch.timeout.connect(self._watch_cmds)
         self._watch.start(10000)
-        self._kota = {}          # key -> {pencere: {name, used, resets}}
-        self._kota_told = set()  # (key, pencere, sıfırlanma): aynı dolum için bir kez yazılır
+        self._kota = {}          # CLI türü -> {pencere: {name, used, resets}}: aynı hesabı kullanan ajanlar ortak
+        self._kota_told = set()  # (tür, pencere, sıfırlanma): aynı dolum için bir kez yazılır
+        self._cmds = {}          # key -> {"cmd", "secs"}: ajanın şu an çalıştırdığı en eski komut
+        self._probe_timer = QTimer(self)
+        self._probe_timer.timeout.connect(self._probe)
+        self._probe_timer.start(3000)
         self._kota_timer = QTimer(self)
         self._kota_timer.timeout.connect(self.refreshQuota)
         self._kota_timer.start(10 * 60 * 1000)
@@ -277,8 +389,299 @@ class Room(QObject):
 
     @Property("QVariantMap", notify=quotaChanged)
     def quota(self):
-        """CLI'ların bildirdiği kota pencereleri: {key: [{name, used, resets}]}; used yüzde, resets Unix zamanı."""
-        return {k: list(v.values()) for k, v in self._kota.items()}
+        """CLI'ların bildirdiği kota pencereleri: {ajan key: [{name, used, resets}]}; used yüzde, resets Unix zamanı.
+        Aynı CLI'ı kullanan ajanlar (Opus ile Sonnet gibi) aynı hesabın kotasını paylaşır: hepsine aynısı gösterilir."""
+        return {a["key"]: list(self._kota.get(kind_of(a), {}).values()) for a in self._s["agents"]}
+
+    # ================= panel =================
+    @Property("QVariantMap", notify=statusChanged)
+    def agentStatus(self):
+        """Panel için: {key: {state, since, act, cmd, cmdSecs, stuck, muted}}.
+        state: running · idle · off (devre dışı) · missing (komut yok)."""
+        out = {}
+        muted = set(self._chat.get("muted", []))
+        for a in self._s["agents"]:
+            k = a["key"]
+            cur = self._running.get(k)
+            c = self._cmds.get(k) or {}
+            act = ""
+            if cur and cur.get("acts"):
+                act = cur["acts"][-1]
+            elif not cur:
+                last = next((m for m in reversed(self._chat["messages"]) if m.get("key") == k), None)
+                act = ("son söz " + last.get("time", "")) if last else ""
+            act = re.sub(r"^[^\w`(]+", "", act).strip()
+            exe = exe_of(a)
+            out[k] = {"state": "running" if cur else "off" if not a.get("enabled") else
+                      "missing" if not (exe and shutil.which(exe)) else "idle",
+                      "since": cur["t0"] if cur else 0, "act": short(act, 120),
+                      "cmd": short(c.get("cmd", ""), 90), "cmdSecs": int(c.get("secs", 0)),
+                      "stuck": bool(cur) and c.get("secs", 0) >= STUCK_SECS, "muted": k in muted}
+        return out
+
+    @Property("QVariantList", notify=filesChanged)
+    def producedFiles(self):
+        """Bu sohbette ajanların ürettiği ya da değiştirdiği, hâlâ diskte duran dosyalar; en yenisi önce."""
+        colors = {a["name"]: a["color"] for a in self._s["agents"]}
+        wd = self._workdir()
+        out = []
+        for path, f in (self._chat.get("files") or {}).items():
+            if not os.path.isfile(path) or "/__pycache__/" in path or "/." in path.replace(wd, ""):
+                continue
+            kind = file_kind(path)
+            if not kind:
+                continue
+            rel = os.path.relpath(path, wd) if path.startswith(wd + os.sep) else path
+            out.append({"path": path, "name": os.path.basename(path), "dir": os.path.dirname(rel) if rel != path else
+                        os.path.dirname(path).replace(str(Path.home()), "~"), "inside": rel != path,
+                        "kind": kind, "ext": path.rsplit(".", 1)[-1].lower(), "who": f.get("who", ""),
+                        "color": colors.get(f.get("who", ""), SYSTEM_COLOR), "t": f.get("t", 0),
+                        "change": f.get("change", "yeni")})
+        out.sort(key=lambda x: x["t"], reverse=True)
+        return out
+
+    def _note_file(self, path, who, change):
+        files = self._chat.setdefault("files", {})
+        if change == "silindi":
+            if files.pop(path, None) is not None:
+                self.filesChanged.emit()
+            return
+        old = files.get(path)
+        files[path] = {"who": who if who and who != "?" else (old or {}).get("who", ""), "t": time.time(),
+                       "change": "yeni" if not old and change == "yeni" else "değişti"}
+        self.filesChanged.emit()
+
+    def _rebuild_files(self):
+        """Eski sohbetler: dosya listesini odadaki "📝 Projede …" satırlarından ve ajanların medyasından çıkar."""
+        if "files" in self._chat:
+            return
+        wd = self._chat.get("workDir") or self._s["workDir"]
+        files = {}
+        for m in self._chat["messages"]:
+            t = m.get("ts") or 0
+            if m.get("key") == "system" and m["text"].startswith("📝 Projede"):
+                for label, body in re.findall(r"(yeni|değişti|silindi):\s*(.*?)(?=;\s*(?:yeni|değişti|silindi):|\n|$)",
+                                              m["text"]):
+                    for rel, who in re.findall(r"`([^`]+)`\s*\(([^)]*)\)", body):
+                        p = os.path.normpath(os.path.join(wd, rel))
+                        if label == "silindi":
+                            files.pop(p, None)
+                        else:
+                            files[p] = {"who": who if who != "?" else files.get(p, {}).get("who", ""), "t": t,
+                                        "change": "yeni" if p not in files and label == "yeni" else "değişti"}
+            elif m.get("key") not in ("system", "user"):
+                for p in m.get("media") or []:
+                    if not p.startswith(str(MEDIA_DIR)):
+                        files.setdefault(p, {"who": m["name"], "t": t, "change": "yeni"})
+        # zaman bilgisi olmayan eski kayıtlar: sıralama mesaj sırasından gelsin
+        for i, f in enumerate(files.values()):
+            f["t"] = f["t"] or i
+        self._chat["files"] = files
+
+    @Slot(str)
+    def stopAgent(self, key):
+        """Yalnız bu ajanı durdur: turu biter, kendiliğinden yeniden başlamaz; sen yazınca yine söz alır."""
+        self._budget[key] = 0
+        self._force.discard(key)
+        self._resume.discard(key)
+        cur = self._running.get(key)
+        if cur:
+            cur["stopped_one"] = True
+            self._log("stop_one", agent=cur["agent"]["name"])
+            cur["proc"].kill()
+
+    def _shell_cmds(self, cur):
+        """Ajanın çalıştırdığı komutlar: CLI'ın altındaki en üst kabuklar (MCP sunucuları kabuk değildir)."""
+        import psutil
+        try:
+            root = psutil.Process(cur["proc"].processId())
+            kids = root.children(recursive=True)
+        except (psutil.Error, ValueError):
+            return []
+        def is_shell(p):
+            try:
+                return os.path.basename(p.name()) in SHELLS
+            except psutil.Error:
+                return False
+        out = []
+        for p in kids:
+            try:
+                parent = p.parent()
+                if is_shell(p) and (parent is None or parent.pid == root.pid or not is_shell(parent)):
+                    out.append(p)
+            except psutil.Error:
+                continue
+        return out
+
+    @Slot(str)
+    def cutCommand(self, key):
+        """Ajanın takılan komutunu (ajanı değil) durdur: ajan komutun bittiğini görür ve devam eder."""
+        import psutil
+        cur = self._running.get(key)
+        if not cur:
+            return
+        n = 0
+        for p in self._shell_cmds(cur):
+            try:
+                name = " ".join(p.cmdline())[:80]
+                for x in p.children(recursive=True) + [p]:
+                    try:
+                        x.kill()
+                        n += 1
+                    except psutil.Error:
+                        pass
+                self._act(cur, f"⏹ {self._s['userName']} komutu kesti: {name}")
+                self._log("cmd_cut", agent=cur["agent"]["name"], cmd=name)
+            except psutil.Error:
+                continue
+        self._cmds.pop(key, None)
+        self.statusChanged.emit()
+        self.statusText.emit(f"{cur['agent']['name']}: komut kesildi" if n else f"{cur['agent']['name']}: çalışan komut yok")
+
+    @Slot(str)
+    def toggleMute(self, key):
+        """Sözü kapat/aç: kapalıyken bu ajan yeni turlara katılmaz; @ ile ya da adına tıklayınca yine konuşur."""
+        muted = self._chat.setdefault("muted", [])
+        if key in muted:
+            muted.remove(key)
+        else:
+            muted.append(key)
+            self._budget[key] = 0
+            self._force.discard(key)
+        self._save_chat()
+        self.statusChanged.emit()
+
+    def _probe(self):
+        """Çalışan ajanların komutlarını yokla: panel ne yaptığını ve ne kadar sürdüğünü göstersin."""
+        if not self._running:
+            if self._cmds or getattr(self, "_was_running", False):
+                self._cmds = {}
+                self._was_running = False
+                self.statusChanged.emit()
+            return
+        self._was_running = True
+        now = time.time()
+        cmds = {}
+        for k, cur in self._running.items():
+            shells = self._shell_cmds(cur)
+            if shells:
+                try:
+                    p = min(shells, key=lambda x: x.create_time())
+                    line = " ".join(p.cmdline())
+                    line = re.sub(r"^.*?(?:\s-l?c\s+)", "", line)             # bash -lc '…' → komutun kendisi
+                    line = re.sub(r"^source\s+\S+.*?&&\s*eval\s+", "", line)   # Claude'un kabuk ön eki
+                    cmds[k] = {"cmd": line.strip("'\" "), "secs": now - p.create_time()}
+                except Exception:
+                    pass
+        self._cmds = cmds
+        self.statusChanged.emit()
+
+    # ================= roller =================
+    @Property("QVariantList", notify=rolesChanged)
+    def roleTemplates(self):
+        """Hazır şablonlar ve kullanıcının kaydettikleri (own: true, silinebilir)."""
+        mine = [dict(x, own=True) for x in self._s.get("roleTemplates") or []]
+        return [dict(x, own=False) for x in ROLE_TEMPLATES] + mine
+
+    @Slot(str, "QVariant", result=str)
+    def saveRoleTemplate(self, name, roles):
+        """Rolleri şablon olarak sakla: başka sohbetlerde de seçilsin. Aynı adlı şablonun üstüne yazar."""
+        roles = roles.toVariant() if hasattr(roles, "toVariant") else roles
+        name = " ".join(str(name or "").split())[:40]
+        clean = [{k: " ".join(str(x.get(k) or "").split())[:300] for k in ("title", "talk", "prod")} for x in roles or []]
+        clean = [x for x in clean if any(x.values())]
+        if not name or not clean:
+            return ""
+        mine = [x for x in self._s.get("roleTemplates") or [] if x["name"].lower() != name.lower()]
+        tid = "k-" + uuid.uuid4().hex[:6]
+        mine.append({"id": tid, "name": name, "roles": clean})
+        self._s["roleTemplates"] = mine
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(self._s, indent=2, ensure_ascii=False))
+        self.rolesChanged.emit()
+        self.statusText.emit(f"Şablon kaydedildi: {name}")
+        return tid
+
+    @Slot(str)
+    def deleteRoleTemplate(self, tid):
+        self._s["roleTemplates"] = [x for x in self._s.get("roleTemplates") or [] if x["id"] != tid]
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(self._s, indent=2, ensure_ascii=False))
+        self.rolesChanged.emit()
+
+    @Property("QVariantMap", notify=rolesChanged)
+    def roles(self):
+        """Bu sohbetin rolleri: {on, template, list: [{title, talk, prod, agents: [key]}]}. Ön tanımlı olarak kapalı.
+        Bir role birden çok ajan atanabilir, bir ajan birden çok rol alabilir."""
+        r = self._chat.get("roles") or {}
+        lst = r.get("list")
+        if lst is None:      # ilk biçim: ajan başına tek rol
+            lst = [dict(x, agents=[k]) for k, x in (r.get("agents") or {}).items()]
+        keys = {a["key"] for a in self._s["agents"]}
+        lst = [dict(x, agents=[k for k in x.get("agents", []) if k in keys]) for x in lst]
+        return {"on": bool(r.get("on")), "template": r.get("template", ""), "list": [x for x in lst if x["agents"]]}
+
+    @Slot("QVariant")
+    def setRoles(self, r):
+        """Rolleri kaydet ve odaya görünür yaz. Kapatılınca da yazılır. Ajanlara oda bilgisiyle bir kez gider."""
+        r = r.toVariant() if hasattr(r, "toVariant") else r
+        keys = [a["key"] for a in self._s["agents"]]
+        lst = []
+        for x in r.get("list") or []:
+            y = {k: " ".join(str(x.get(k) or "").split())[:300] for k in ("title", "talk", "prod")}
+            y["agents"] = [k for k in keys if k in (x.get("agents") or [])]
+            if y["agents"] and any(y[k] for k in ("title", "talk", "prod")):
+                lst.append(y)
+        on = bool(r.get("on")) and bool(lst)
+        new = {"on": on, "template": r.get("template", "") if on else "", "list": lst if on else []}
+        old = self.roles
+        if old == new or (not on and not old["on"]):
+            return
+        self._chat["roles"] = new
+        self._chat["rolesRev"] = int(self._chat.get("rolesRev", 0)) + 1
+        who = self._s["userName"]
+        if on:
+            prod = bool(self._s.get("production"))
+            parts = []
+            for x in lst:
+                d = x["prod"] if prod and x["prod"] else x["talk"] or x["prod"]
+                parts.append(f"**{x['title'] or 'Rol'}** — {self._names(x['agents'])}" + (f": {d}" if d else ""))
+            text = (f"🎭 {who} roller belirledi. Roller yetki değil, sorumluluk alanıdır; ortak karar kuralı aynen sürer.\n"
+                    + "\n".join("- " + p for p in parts))
+        else:
+            text = f"🎭 {who} rolleri kapattı: kimsenin rolü yok."
+        self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, text, True, 0, emit=True)
+        self._save_chat()
+        self.rolesChanged.emit()
+        self.statusText.emit("Roller kaydedildi" if on else "Roller kapatıldı")
+
+    def _names(self, keys):
+        ns = [a["name"] for a in self._s["agents"] if a["key"] in keys]
+        return ns[0] if len(ns) == 1 else ", ".join(ns[:-1]) + " ve " + ns[-1] if ns else ""
+
+    def _hdr_ver(self):
+        return HEADER_VER * 1000 + int(self._chat.get("rolesRev", 0))
+
+    def _role_lines(self, agent):
+        r = self.roles
+        if not r["on"]:
+            return []
+        prod = bool(self._s.get("production"))
+        def desc(x):
+            d = x.get("prod") if prod and x.get("prod") else x.get("talk") or x.get("prod") or ""
+            return (x.get("title") or "rol") + (f" ({d})" if d else "")
+        k = agent["key"]
+        mine = [x for x in r["list"] if k in x["agents"]]
+        out = [f"{self._s['userName']} bu sohbet için roller belirledi. Roller yetki değil sorumluluk alanıdır; "
+               "kimse yönetici değildir, ortak karar yine açık destekle alınır."]
+        for x in mine:
+            mates = [a for a in x["agents"] if a != k]
+            out.append("Senin rolün: " + desc(x) + (f"; bu rolü {self._names(mates)} ile paylaşıyorsun." if mates else "."))
+        others = [f"{self._names([a for a in x['agents'] if a != k])}: {desc(x)}" for x in r["list"]
+                  if x not in mine]
+        if others:
+            out.append("Diğer roller: " + "; ".join(others) + ".")
+        return out
 
     @Slot(str, bool, float, result=str)
     def renderMd(self, md, dark, scale):
@@ -323,7 +726,23 @@ class Room(QObject):
     def saveSettings(self, s):
         s = s.toVariant() if hasattr(s, "toVariant") else s
         clean = {k: s.get(k, DEFAULTS[k]) for k in DEFAULTS}
-        clean["agents"] = [{k: a.get(k) for k in DEFAULTS["agents"][0]} for a in s["agents"]]
+        clean["agents"] = [{k: a.get(k, v) for k, v in base_agent(a).items()} for a in s["agents"] if a.get("key")]
+        if not clean["agents"]:
+            clean["agents"] = json.loads(json.dumps(self._s["agents"]))
+        # ad ve anahtar tek olmalı: @ ile söz verme, "kim konuştu" ve oturumlar bunlarla bulunur
+        keys, names = set(), set()
+        for a in clean["agents"]:
+            while a["key"] in keys:
+                a["key"] = kind_of(a) + "-" + uuid.uuid4().hex[:4]
+            keys.add(a["key"])
+            base = " ".join(str(a.get("name") or base_agent(a)["name"]).split())[:40] or base_agent(a)["name"]
+            name, n = base, 2
+            while name.lower() in names or name.lower() == str(clean["userName"]).lower() or name.lower() == "oda":
+                name, n = f"{base} {n}", n + 1
+            a["name"] = name
+            names.add(name.lower())
+        clean["panelOpen"] = bool(clean.get("panelOpen", True))
+        clean["roleTemplates"] = self._s.get("roleTemplates") or []      # şablonlar yalnız kendi düğmeleriyle değişir
         clean["autoRounds"] = int(clean["autoRounds"])
         clean["maxChars"] = int(clean["maxChars"])
         clean["maxCalls"] = max(0, int(clean.get("maxCalls") or 0))
@@ -394,6 +813,35 @@ class Room(QObject):
         if clean["production"] != was_prod and self._force:
             self._schedule()
 
+    AGENT_COLORS = ["#4f8cff", "#d97757", "#10a37f", "#f59e0b", "#ec4899", "#06b6d4", "#eab308", "#a3e635", "#f472b6"]
+
+    @Slot(str, "QVariant", result="QVariant")
+    def newAgent(self, kind, agents):
+        """Ayarlarda "Ajan ekle": aynı CLI'dan bir ajan daha (başka model, başka çaba). Ad ve renk boşta olandan."""
+        agents = agents.toVariant() if hasattr(agents, "toVariant") else (agents or [])
+        base = next((d for d in DEFAULTS["agents"] if d["key"] == kind), DEFAULTS["agents"][0])
+        a = json.loads(json.dumps(base))
+        keys = {x.get("key") for x in agents}
+        a["key"] = kind + "-" + uuid.uuid4().hex[:4]
+        while a["key"] in keys:
+            a["key"] = kind + "-" + uuid.uuid4().hex[:4]
+        names = {str(x.get("name", "")).lower() for x in agents}
+        n = 2
+        a["name"] = base["name"]
+        while a["name"].lower() in names:
+            a["name"], n = f"{base['name']} {n}", n + 1
+        used = {x.get("color") for x in agents}
+        a["color"] = next((c for c in self.AGENT_COLORS if c not in used), base["color"])
+        a["enabled"] = True
+        exe = exe_of(a)
+        a["found"] = bool(exe and shutil.which(exe))
+        return a
+
+    @Slot(str, str)
+    def fetchModelsFor(self, key, command):
+        """Henüz kaydedilmemiş (yeni eklenen) ajanın modelleri: komutuna bakarak."""
+        self._models_for(key, {"key": key, "command": command})
+
     @Slot()
     def resetSettings(self):
         self.saveSettings(json.loads(json.dumps(DEFAULTS)))
@@ -405,6 +853,9 @@ class Room(QObject):
         self._chat = new_chat(self._s["workDir"])
         self._talk_mode()
         self.roomReset.emit()
+        self.filesChanged.emit()
+        self.rolesChanged.emit()
+        self.statusChanged.emit()
         self.chatsChanged.emit()
         self.statusText.emit("Yeni sohbet — bir konu aç")
 
@@ -428,7 +879,11 @@ class Room(QObject):
             if "seen" in v:
                 c["seen"].setdefault(k, v["seen"])
         self._chat = c
+        self._rebuild_files()
         self.roomReset.emit()
+        self.filesChanged.emit()
+        self.rolesChanged.emit()
+        self.statusChanged.emit()
         ids = [m.get("id") for m in c["messages"]]
         for m in c["messages"]:
             # kayıtlı kimlik tekse onu kullan: sabitleme gibi işlemler mesajı bununla bulur
@@ -592,6 +1047,8 @@ class Room(QObject):
         self._save_chat()
         self.chatsChanged.emit()
         targets = self._mentions(text)
+        for k in targets:
+            self._force.add(k)      # @ ile anılan, sözü kapalı olsa da konuşur
         n = INF if self._s.get("autoMode") and not targets else max(1, int(self._s["autoRounds"]))
         for a in self._enabled():
             if targets:
@@ -655,6 +1112,8 @@ class Room(QObject):
                 k = a["key"]
                 if k in self._running or self._budget.get(k, 0) <= 0:
                     continue
+                if k in self._chat.get("muted", []) and k not in self._force:
+                    continue      # sözü kapalı: yalnız adına tıklayınca ya da @ ile konuşur
                 if k not in self._force and not self._has_unseen(a):
                     continue
                 cap = int(self._s.get("maxCalls") or 0)
@@ -672,6 +1131,7 @@ class Room(QObject):
                 self._start(a)
         self.busyChanged.emit()
         self.speakingChanged.emit()
+        self.statusChanged.emit()
         if not self._running:
             if self._capped:
                 self.statusText.emit(f"Çağrı sınırı doldu ({self._calls}) — sıra sende")
@@ -710,8 +1170,10 @@ class Room(QObject):
     def fetchModels(self, key):
         """CLI'ın sunduğu modelleri ve effort seviyelerini getir."""
         a = self._agent(key)
-        if not a:
-            return
+        if a:
+            self._models_for(key, a)
+
+    def _models_for(self, key, a):
         exe = exe_of(a)
         efforts = ["low", "medium", "high", "xhigh", "max"]
         if exe == "claude":
@@ -756,8 +1218,9 @@ class Room(QObject):
 
     def _mentions(self, text):
         low = text.lower()
-        return [a["key"] for a in self._enabled()
-                if "@" + a["key"].lower() in low or "@" + a["name"].lower() in low]
+        def said(w):
+            return re.search("@" + re.escape(w.lower()) + r"(?![\w-])", low) is not None
+        return [a["key"] for a in self._enabled() if said(a["key"]) or said(a["name"])]
 
     def _post_pact(self, kind):
         """Oda anlaşmasını sohbette bir kez göster: Tartışma'da ilk mesajla, Üretim ilk açılınca."""
@@ -774,7 +1237,7 @@ class Room(QObject):
     def _append_msg(self, mid, key, name, color, text, ok, secs, emit=False, acts=None):
         t = time.strftime("%H:%M")
         m = {"id": mid, "key": key, "name": name, "color": color, "text": text,
-             "ok": ok, "secs": round(secs, 1), "time": t}
+             "ok": ok, "secs": round(secs, 1), "time": t, "ts": round(time.time(), 1)}
         if acts:
             m["acts"] = acts
         self._chat["messages"].append(m)
@@ -827,15 +1290,20 @@ class Room(QObject):
         self._log("delivered", to=cur["agent"]["name"], seen=n)
 
     def _header(self, agent):
-        people = [self._s["userName"]] + [a["name"] for a in self._enabled()]
-        people = [p + " (sen)" if p == agent["name"] else p for p in people]
-        mode = ("Üretim — dosya yazılabilir, komut çalıştırılabilir" if self._s.get("production")
-                else f"Tartışma — proje dosyaları yalnızca okunur; komutlar çalıştırılabilir; resim, belge ve taslaklar {self._drafts()} klasörüne yazılabilir. " + self._draft_rule()
+        """Ajana giden oda bilgisi. "Konum: …" gibi başlıklı satırlar yerine düz cümle: başlıklı biçimi Gemini her
+        mesajında rapor kalıbı olarak tekrarlıyordu (19.11.2026)."""
+        others = [self._s["userName"]] + [a["name"] for a in self._enabled() if a["name"] != agent["name"]]
+        mode = ("Şu an Üretim modundayız: dosya yazılabilir, komut çalıştırılabilir." if self._s.get("production")
+                else f"Şu an Tartışma modundayız: proje dosyaları yalnızca okunur, komutlar çalıştırılabilir; resim, belge ve taslaklar {self._drafts()} klasörüne yazılabilir. " + self._draft_rule()
                 if self._jailed_ok() else
-                "Tartışma — proje dosyaları yalnızca okunur; bu makinede Tartışma kutusu kurulamadığı için dosya üretimi kullanılamıyor")
-        return (f"Konum: {self._workdir()}\nOdadakiler: {', '.join(people)}\nMod: {mode}\n"
-                "Ekran: Mesajda yolu geçen ya da yazılan resim (png, jpg, gif, webp, svg), video (mp4, webm, mov), "
-                "ses (mp3, wav, ogg), html ve pdf dosyaları odada herkese gösterilir.")
+                "Şu an Tartışma modundayız: proje dosyaları yalnızca okunur; bu makinede Tartışma kutusu kurulamadığı için dosya üretimi kullanılamıyor.")
+        lines = [f"(Oda bilgisi, yalnız senin için. Odaya yazarken bunu tekrarlama; mesajını konum, katılımcı listesi "
+                 f"ya da rapor başlığıyla açma. Yalnız kendi adınla konuş.)",
+                 f"Bu bir sohbet odası ve sen {agent['name']} olarak buradasın. Odada ayrıca {', '.join(others)} var.",
+                 f"Çalışma klasörü {self._workdir()}. {mode}",
+                 "Mesajda yolu geçen ya da yazılan resim (png, jpg, gif, webp, svg), video (mp4, webm, mov), "
+                 "ses (mp3, wav, ogg), html ve pdf dosyaları odada herkese gösterilir."]
+        return "\n".join(lines + self._role_lines(agent))
 
     @staticmethod
     def _fmt(msgs):
@@ -847,7 +1315,7 @@ class Room(QObject):
         if resumed:
             new = [m for m in tr[self._seen(agent["key"]):] if m["name"] != agent["name"]]
             body = self._fmt(new or tr[-1:])
-            if self._chat.get("hdr", {}).get(agent["key"], 0) < HEADER_VER:
+            if self._chat.get("hdr", {}).get(agent["key"], 0) != self._hdr_ver():
                 body = self._header(agent) + "\n\n" + body     # oturum eski oda bilgisiyle açılmıştı
             return body
         body = self._fmt(tr)
@@ -1000,12 +1468,41 @@ class Room(QObject):
     def _user_line(text):
         return json.dumps({"type": "user", "message": {"role": "user", "content": text}}, ensure_ascii=False) + "\n"
 
+    _shell_path = None
+
+    @classmethod
+    def _user_path(cls):
+        """Kullanıcının terminalde gördüğü PATH. Uygulama menüden açılınca ~/.bashrc okunmaz; oraya eklenen araçlar
+        (Flutter, Cargo, Go…) ajanlara görünmüyordu: "Flutter bu makinede kurulu değil" (19.11.2026)."""
+        if cls._shell_path is None:
+            found = []
+            shell = os.environ.get("SHELL") or "/bin/bash"
+            try:
+                out = subprocess.run([shell, "-ilc", 'printf "\\n__PATH__%s\\n" "$PATH"'], capture_output=True,
+                                     text=True, timeout=5, stdin=subprocess.DEVNULL).stdout
+                m = re.search(r"__PATH__(.*)", out)
+                found = [p for p in (m.group(1).split(":") if m else []) if p]
+            except (OSError, subprocess.SubprocessError):
+                pass
+            home = Path.home()
+            for d in ("flutter/bin", ".pub-cache/bin", ".cargo/bin", "go/bin", ".npm-global/bin", ".bun/bin",
+                      ".deno/bin", ".local/bin"):
+                if (home / d).is_dir():
+                    found.append(str(home / d))
+            cls._shell_path = found
+        return cls._shell_path
+
     def _env(self):
         env = QProcessEnvironment.systemEnvironment()
         for k in list(env.keys()):
             if k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_"):
                 env.remove(k)
         env.insert("NO_COLOR", "1")
+        path = [p for p in env.value("PATH", "").split(":") if p]
+        for p in self._user_path():
+            if p not in path:
+                path.append(p)
+        env.insert("PATH", ":".join(path))
         return env
 
     def _workdir(self):
@@ -1106,7 +1603,7 @@ class Room(QObject):
             fmt, args, stdin = "cxs", [args[0], "app-server"] + self._codex_lean(), None
         args = pre + args
 
-        self._chat.setdefault("hdr", {})[key] = HEADER_VER
+        self._chat.setdefault("hdr", {})[key] = self._hdr_ver()
         prod_now = bool(self._s.get("production"))
         mid = uuid.uuid4().hex
         self._log("start", id=mid, agent=a["name"], model=a.get("model") or "", effort=a.get("effort") or "",
@@ -1201,6 +1698,9 @@ class Room(QObject):
         if media:
             self._chat["messages"][-1]["media"] = media
             self.messageMedia.emit(mid, "\n".join(media))
+            for f in media:
+                if not f.startswith(str(MEDIA_DIR)) and f in cur.get("files", []):
+                    self._note_file(f, cur["agent"]["name"], "yeni")
         cur["files"] = []
 
     def _watch_cmds(self):
@@ -1629,6 +2129,8 @@ class Room(QObject):
         for label, ps in (("yeni", added), ("değişti", changed), ("silindi", removed)):
             if ps:
                 parts.append(f"{label}: {fmt(ps)}")
+            for p in ps:
+                self._note_file(os.path.normpath(os.path.join(wd, p)), who(p), label)
         text = "📝 Projede " + "; ".join(parts)
 
         # aynı dosyaya kısa aralıkla birden fazla ajan yazdıysa görünür olsun (engellemez, yalnızca bildirir)
@@ -1653,7 +2155,7 @@ class Room(QObject):
     def _quota(self, a, windows, fresh=False):
         """CLI'ın bildirdiği kota pencereleri. Asıl pencerelerden biri dolduysa odaya bir kez yazılır: herkes görür.
         fresh: /usage raporunun tamamı, eskisinin yerine geçer; tur olayları ise yalnızca kendi pencerelerini günceller."""
-        key = a["key"]
+        key = kind_of(a)
         mine = {} if fresh else dict(self._kota.get(key) or {})
         for w in windows:
             mine[w["name"]] = w
@@ -1733,8 +2235,11 @@ class Room(QObject):
 
     @Slot()
     def refreshQuota(self):
+        seen = set()
         for a in self._enabled():
-            self._read_quota(a)
+            if kind_of(a) not in seen:       # aynı hesabı kullananlar için bir kez sor
+                seen.add(kind_of(a))
+                self._read_quota(a)
 
     def _read_quota(self, a):
         """Ajanın kendi CLI'ına kotayı sor; model çağrısı yok, bir şey harcanmaz. Boş bir klasörde çalışır."""
@@ -1742,17 +2247,17 @@ class Room(QObject):
         if exe not in ("claude", "codex", "agy", "antigravity") or not shutil.which(exe):
             return
         procs = self.__dict__.setdefault("_quota_procs", {})
-        if a["key"] in procs:
+        if kind_of(a) in procs:
             return
         folder = DATA_DIR / "kota"
         folder.mkdir(parents=True, exist_ok=True)
         p = QProcess(self)
         p.setWorkingDirectory(str(folder))
-        procs[a["key"]] = p
+        procs[kind_of(a)] = p
         buf = bytearray()
 
         def finish(windows):
-            procs.pop(a["key"], None)
+            procs.pop(kind_of(a), None)
             if windows:
                 self._quota(a, windows, fresh=True)
             try:
@@ -1806,8 +2311,9 @@ class Room(QObject):
         QTimer.singleShot(60000, lambda: p.state() != QProcess.NotRunning and p.kill())
 
     def _quota_full(self, a, w=None, why=""):
-        tag = (a["key"], (w or {}).get("name"), (w or {}).get("resets"))
-        if tag in self._kota_told or (not w and any(t[0] == a["key"] for t in self._kota_told)):
+        kind = kind_of(a)
+        tag = (kind, (w or {}).get("name"), (w or {}).get("resets"))
+        if tag in self._kota_told or (not w and any(t[0] == kind for t in self._kota_told)):
             return
         self._kota_told.add(tag)
         names = {"5h": "5 saatlik pencere", "week": "haftalık pencere"}
@@ -1820,8 +2326,11 @@ class Room(QObject):
                              + " civarı açılır")
         elif why:
             parts.append(short(why, 160))
-        text = (f"⛔ {a['name']} kullanım kotası doldu" + (f" ({', '.join(parts)})" if parts else "")
-                + ". Kota açılana kadar yanıt veremez.")
+        same = [x["name"] for x in self._enabled() if kind_of(x) == kind] or [a["name"]]
+        who = same[0] if len(same) == 1 else ", ".join(same[:-1]) + " ve " + same[-1]
+        text = (f"⛔ {who} kullanım kotası doldu" + (f" ({', '.join(parts)})" if parts else "")
+                + (". Kota açılana kadar yanıt veremez." if len(same) == 1 else
+                   ". Aynı hesabı kullandıkları için kota açılana kadar yanıt veremezler."))
         self._log("quota_full", agent=a["name"], window=(w or {}).get("name"), why=why)
         self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, text, True, 0, emit=True)
         self._save_chat()
@@ -1830,10 +2339,13 @@ class Room(QObject):
         """Açık kalan süreçte bir tur bitti: cevabı odaya koy, sonraki tur için yeni balon aç."""
         a, key = cur["agent"], cur["agent"]["key"]
         dt = time.time() - cur["t0"]
+        text, echo_note = strip_echo(text, a["name"], [x["name"] for x in self._s["agents"]] + [self._s["userName"]])
         if text:
             self._append_msg(cur["id"], key, a["name"], a["color"], text, True, dt, acts=cur["acts"])
+            if echo_note:
+                self._chat["messages"][-1]["note"] = echo_note
             self._attach_media(cur, cur["id"], text)
-            self.messageUpdated.emit(cur["id"], text)
+            self.messageUpdated.emit(cur["id"], text + (f"\n\n_⚠ {echo_note}_" if echo_note else ""))
             self.messageDone.emit(cur["id"], True, dt)
             if count:
                 self._calls += 1      # açık süreçteki her yeni tur da bir çağrı sayılır
@@ -1893,7 +2405,8 @@ class Room(QObject):
         if cur["fmt"] in ("codex", "cxs") and not cur["new_sid"]:
             cur["new_sid"] = cur["sid"]
 
-        stopped = self._stopped
+        stopped = self._stopped or bool(cur.get("stopped_one"))
+        text, echo_note = strip_echo(text, a["name"], [x["name"] for x in self._s["agents"]] + [self._s["userName"]])
         restart = cur.get("restart") and not stopped
         if restart:
             code, cur["error"] = 0, ""        # bilerek durdurduk: hata değil
@@ -1919,6 +2432,8 @@ class Room(QObject):
             notes = []
             if denied:
                 notes.append(f"izin verilmedi: {', '.join(denied)}")
+            if echo_note:
+                notes.append(echo_note)
             if stopped:
                 notes.append("durduruldu")
             elif code != 0 or cur["error"]:
@@ -1952,7 +2467,7 @@ class Room(QObject):
             self._budget[key] = 0     # hata veren ajan kendiliğinden yeniden başlamasın; sen yazınca tekrar dener
             self.messageUpdated.emit(cur["id"], msg)
         if ok:      # konuşabildi: kota yeniden açılmış, bir sonraki dolum yine yazılsın
-            self._kota_told = {t for t in self._kota_told if t[0] != key}
+            self._kota_told = {t for t in self._kota_told if t[0] != kind_of(a)}
         if not ok and not stopped and not restart:
             why = cur["error"] or err[-600:]
             if LIMIT_ERROR.search(why or ""):
