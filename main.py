@@ -1457,7 +1457,14 @@ class Room(QObject):
             cur["new_sid"] = r.get("conversation_id") or cur["new_sid"]
             resp = (r.get("response") or "").strip()
             if r.get("status") not in (None, "SUCCESS"):
-                cur["error"] = str(r.get("error") or r.get("status"))
+                why = str(r.get("error") or r.get("status"))
+                # agy, oturumda bir kez yaşanmış hatayı (ör. bağlantı kopması) sonraki her turda yeniden
+                # bildiriyor; aynı oturumda zaten bildirilmiş hata cevapla birlikte gelirse yok sayılır
+                seen = self._chat.setdefault("agyErrors", {})
+                sid = cur["new_sid"] or cur["sid"] or ""
+                if not (resp and seen.get(sid) == why):
+                    cur["error"] = why
+                seen[sid] = why
             for d in r.get("denied_actions") or []:
                 cur["denied"].append(d.get("display_name") or d.get("action") or "?")
             cur["turns"] = cur.get("turns", 0) + 1
