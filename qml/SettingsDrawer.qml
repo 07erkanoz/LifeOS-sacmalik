@@ -207,6 +207,7 @@ Drawer {
                         readonly property var a: d.draft.agents[index]
                         readonly property var t: d.tests[a.key]
                         readonly property bool isAgy: a.key === "agy" || a.command.indexOf("agy") === 0
+                        readonly property bool isApi: a.kind === "api" || a.key.indexOf("api") === 0
                         Layout.fillWidth: true
                         implicitHeight: col.implicitHeight + 28
                         radius: 14; color: Theme.card
@@ -227,7 +228,7 @@ Drawer {
                                     radius: 6; implicitWidth: lbl.implicitWidth + 12; implicitHeight: 20
                                     color: card.a.found ? Qt.rgba(0.2, 0.83, 0.6, 0.15) : Qt.rgba(0.94, 0.27, 0.27, 0.15)
                                     Text { id: lbl; anchors.centerIn: parent; font.pixelSize: Theme.fs(10)
-                                           text: card.a.found ? "bulundu" : "PATH'te yok"
+                                           text: card.isApi ? (card.a.found ? "API" : "LifeOS modeller yok") : card.a.found ? "bulundu" : "PATH'te yok"
                                            color: card.a.found ? "#3ddc84" : "#ef4444" }
                                 }
                                 Item { Layout.fillWidth: true }
@@ -247,9 +248,15 @@ Drawer {
                                 Layout.fillWidth: true
                                 Text { text: "Görünen ad"; color: Theme.textDim; font.pixelSize: Theme.fs(12) }
                                 Field { Layout.fillWidth: true; text: card.a.name; onTextEdited: d.setAgent(card.index, "name", text) }
-                                Text { text: "Komut"; color: Theme.textDim; font.pixelSize: Theme.fs(12) }
-                                Field { Layout.fillWidth: true; text: card.a.command; font.family: "monospace"
+                                Text { visible: !card.isApi; text: "Komut"; color: Theme.textDim; font.pixelSize: Theme.fs(12) }
+                                Field { visible: !card.isApi; Layout.fillWidth: true; text: card.a.command; font.family: "monospace"
                                         onTextEdited: d.setAgent(card.index, "command", text) }
+                                Text { visible: card.isApi; Layout.alignment: Qt.AlignTop; text: "Hesap"; color: Theme.textDim; font.pixelSize: Theme.fs(12) }
+                                Text {
+                                    visible: card.isApi
+                                    Layout.fillWidth: true; wrapMode: Text.WordWrap; color: Theme.muted; font.pixelSize: Theme.fs(11)
+                                    text: "CLI'ı olmayan modeller (Groq, Gemini, OpenRouter, Cloudflare, yerel LM Studio/Ollama, ücretli OpenAI/Anthropic) LifeOS'un hesaplarıyla çalışır; anahtarlar anahtarlıkta durur. Hesap eklemek: LifeOS Asistan → Hesaplar ya da terminalde lifeos modeller ekle. Otomatik seçim önce yerel ve ücretsiz modelleri dener. Dosya okur, yazar, komut çalıştırır; Tartışma'da yalnız taslak/ klasörüne yazar."
+                                }
                                 Text { text: "Renk"; color: Theme.textDim; font.pixelSize: Theme.fs(12) }
                                 RowLayout {
                                     spacing: 6
@@ -304,6 +311,7 @@ Drawer {
                             }
 
                             Text {
+                                visible: !card.isApi
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap; color: Theme.muted; font.pixelSize: Theme.fs(11)
                                 text: "{prompt} varsa döküm argüman olarak geçer, yoksa stdin'den verilir. Test, kaydedilmiş komutla \"Merhaba\" gönderir."
                             }
@@ -349,11 +357,12 @@ Drawer {
                         spacing: 10
                         Text { text: "AJAN EKLE"; color: Theme.muted; font.pixelSize: Theme.fs(10); font.letterSpacing: 1.5 }
                         Text { Layout.fillWidth: true; wrapMode: Text.WordWrap; color: Theme.textDim; font.pixelSize: Theme.fs(12)
-                               text: "Aynı CLI'dan bir ajan daha ekleyin; modelini ve çabasını ayrı seçin (ör. Opus ve Sonnet, iki Codex). Aynı CLI'ı kullananlar aynı hesabın kotasını paylaşır. Kaydet'e basınca odaya ve sağdaki panele girer." }
+                               text: "Aynı CLI'dan bir ajan daha ekleyin; modelini ve çabasını ayrı seçin (ör. Opus ve Sonnet, iki Codex). Aynı CLI'ı kullananlar aynı hesabın kotasını paylaşır." + (d.draft.apiReady ? " API modeli: CLI'ı olmayan bir model (ör. ücretsiz Groq ya da Gemini) LifeOS hesaplarınızla odaya katılır." : "") + " Kaydet'e basınca odaya ve sağdaki panele girer." }
                         RowLayout {
                             spacing: 8
                             Repeater {
                                 model: [["claude", "Claude", "#d97757"], ["codex", "Codex", "#10a37f"], ["agy", "Antigravity", "#4f8cff"]]
+                                         .concat(d.draft.apiReady ? [["api", "API modeli", "#a78bfa"]] : [])
                                 GhostButton { text: "＋  " + modelData[1]; accent: modelData[2]; onClicked: d.addAgent(modelData[0]) }
                             }
                         }

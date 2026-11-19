@@ -74,6 +74,42 @@ ApplicationWindow {
         if (!r.on) return ""
         return r.list.filter(function(x) { return x.agents.indexOf(key) >= 0 }).map(function(x) { return x.title || "rol" }).join(" · ")
     }
+    // @ ile söz verme: "@" yazınca odadaki ajanlar listelenir, yazdıkça süzülür
+    function updateMention() {
+        var before = input.text.slice(0, input.cursorPosition)
+        var m = before.match(/(^|\s)@([^\s@]{0,24})$/)
+        if (!m) { mention.items = []; mention.dismissed = -1; return }
+        var at = before.length - m[2].length - 1
+        if (mention.dismissed === at) { mention.items = []; return }
+        var q = m[2].toLowerCase()
+        var list = win.enabledAgents.filter(function(a) {
+            return a.name.toLowerCase().indexOf(q) >= 0      // görünen ada göre: "@c" Claude ve Codex, "@op" Opus
+        })
+        if (q && list.length === 1 && list[0].name.toLowerCase() === q) list = []   // zaten tam yazılmış
+        mention.at = at
+        if (JSON.stringify(list.map(function(a) { return a.key })) !== JSON.stringify(mention.items.map(function(a) { return a.key })))
+            mention.index = 0
+        mention.items = list
+    }
+    function pickMention(a) {
+        if (!a) return
+        var before = input.text.slice(0, mention.at), after = input.text.slice(input.cursorPosition)
+        var tag = "@" + a.name.toLowerCase() + " "
+        input.text = before + tag + after.replace(/^\S*\s?/, "")
+        input.cursorPosition = before.length + tag.length
+        mention.items = []
+        input.forceActiveFocus()
+    }
+    // mesajdaki ajan adına tıklayınca: adı yazı kutusuna eklenir
+    function insertMention(name) {
+        var tag = "@" + name.toLowerCase() + " "
+        var pos = input.cursorPosition, t = input.text
+        if (t.toLowerCase().indexOf(tag.trim()) >= 0) { input.forceActiveFocus(); return }
+        var pre = pos > 0 && !/\s/.test(t.charAt(pos - 1)) ? " " : ""
+        input.text = t.slice(0, pos) + pre + tag + t.slice(pos)
+        input.cursorPosition = pos + pre.length + tag.length
+        input.forceActiveFocus()
+    }
     function countWord(n) { return ["hiç", "bir", "iki", "üç", "dört", "beş", "altı", "yedi", "sekiz", "dokuz"][n] || String(n) }
     readonly property var enabledAgents: (cfg.agents || []).filter(function(a) { return a.enabled })
     readonly property string chatTitle: {
@@ -797,6 +833,46 @@ ApplicationWindow {
                     radius: composer.radius; blur: 22; spread: 0
                     color: Qt.rgba(0, 0, 0, Theme.shadow)
                 }
+                // @ önerisi: yazı kutusunun hemen üstünde
+                Rectangle {
+                    id: mention
+                    property var items: []
+                    property int index: 0
+                    property int at: -1
+                    property int dismissed: -1
+                    visible: items.length > 0 && input.activeFocus
+                    z: 50
+                    x: composer.x + 44
+                    y: composer.y - height - 8
+                    width: 280; height: mcol.implicitHeight + 12
+                    radius: 12; color: Theme.card; border.color: Theme.line
+                    RectangularShadow { anchors.fill: parent; z: -1; radius: parent.radius; blur: 18; color: Qt.rgba(0, 0, 0, Theme.shadow * 0.8) }
+                    Column {
+                        id: mcol
+                        x: 6; y: 6; width: parent.width - 12
+                        Repeater {
+                            model: mention.items
+                            Rectangle {
+                                width: mcol.width; height: 40; radius: 8
+                                color: index === mention.index ? Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.18) : mm.containsMouse ? Theme.cardHi : "transparent"
+                                Row {
+                                    x: 8; anchors.verticalCenter: parent.verticalCenter; spacing: 10
+                                    Rectangle { width: 24; height: 24; radius: 12; color: modelData.color; anchors.verticalCenter: parent.verticalCenter
+                                        Text { anchors.centerIn: parent; text: modelData.name.charAt(0); color: "white"; font.bold: true; font.pixelSize: Theme.fs(11) } }
+                                    Column {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        Text { text: modelData.name; color: Theme.text; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                                        Text { text: "@" + modelData.name.toLowerCase() + (modelData.model ? "  ·  " + win.shortModel(modelData.model) : "")
+                                               color: Theme.muted; font.pixelSize: Theme.fs(10.5) }
+                                    }
+                                }
+                                MouseArea { id: mm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onEntered: mention.index = index
+                                            onClicked: win.pickMention(modelData) }
+                            }
+                        }
+                    }
+                }
                 Rectangle {
                     id: composer
                     anchors.horizontalCenter: parent.horizontalCenter
@@ -880,12 +956,23 @@ ApplicationWindow {
                                 wrapMode: TextArea.Wrap
                                 background: null
                                 focus: true
+                                onTextChanged: win.updateMention()
+                                onCursorPositionChanged: win.updateMention()
                                 Keys.onReturnPressed: function(e) {
+                                    if (mention.visible) { win.pickMention(mention.items[mention.index]); return }
                                     if (e.modifiers & Qt.ShiftModifier) { e.accepted = false; return }
                                     sendBtn.clicked()
                                 }
                                 // panoda resim ya da dosya varsa ek olarak al; yoksa normal yapıştır
                                 Keys.onPressed: function(e) {
+                                    // @ önerisi açıkken: oklar seçer, Tab seçileni yazar, Esc kapatır
+                                    if (mention.visible) {
+                                        var n = mention.items.length
+                                        if (e.key === Qt.Key_Down) { mention.index = (mention.index + 1) % n; e.accepted = true; return }
+                                        if (e.key === Qt.Key_Up) { mention.index = (mention.index - 1 + n) % n; e.accepted = true; return }
+                                        if (e.key === Qt.Key_Tab) { win.pickMention(mention.items[mention.index]); e.accepted = true; return }
+                                        if (e.key === Qt.Key_Escape) { mention.dismissed = mention.at; mention.items = []; e.accepted = true; return }
+                                    }
                                     if (e.matches(StandardKey.Paste)) {
                                         var f = room.pasteFromClipboard()
                                         if (f.length) { win.addAttachments(f); e.accepted = true }

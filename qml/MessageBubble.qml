@@ -151,7 +151,14 @@ Item {
                 visible: showHeader
                 spacing: 8
                 Layout.alignment: isUser ? Qt.AlignRight : Qt.AlignLeft
-                Text { text: model.name; color: isUser ? Theme.textDim : root.c; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold }
+                Text {
+                    text: model.name; color: isUser ? Theme.textDim : root.c; font.pixelSize: Theme.fs(13); font.weight: Font.DemiBold
+                    font.underline: nameMa.containsMouse && !isUser
+                    // ajanın adına tıkla: "@ad" yazı kutusuna gelir
+                    MouseArea { id: nameMa; anchors.fill: parent; enabled: !isUser; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: win.insertMention(model.name) }
+                    ToolTip.visible: nameMa.containsMouse; ToolTip.delay: 500; ToolTip.text: "@" + model.name.toLowerCase() + " olarak yazı kutusuna ekle"
+                }
                 Text { text: model.time; color: Theme.muted; font.pixelSize: Theme.fs(11) }
                 Text {
                     visible: !model.pending && model.secs > 0

@@ -162,6 +162,17 @@ SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
 NOISE_RE = re.compile(r"/(?:build|\.dart_tool|node_modules|\.gradle|Pods|DerivedData|__pycache__|\.venv|venv|dist|"
                       r"mipmap-[^/]+|drawable[^/]*|[^/]+\.xcassets|web/icons|\.git)/")
 STUCK_SECS = 240
+# API ajanı (19.11.2026): CLI'ı olmayan modeller (Groq, Gemini, OpenRouter, yerel…) api_ajan.py süreciyle katılır;
+# hesaplar, model seçimi, kota ve araçlı döngü LifeOS'un modeller katmanından (lifeos_store.modeller).
+API_SCRIPT = Path(__file__).resolve().parent / "api_ajan.py"
+API_AGENT = {"key": "api", "name": "API", "color": "#a78bfa", "enabled": True, "command": "", "timeout": 0,
+             "model": "auto", "effort": "", "modelArg": "", "effortArg": "", "allowRules": "", "kind": "api"}
+
+
+def api_ready():
+    """LifeOS'un modeller katmanı bu bilgisayarda var mı (API ajanı onunla çalışır)."""
+    return API_SCRIPT.is_file() and any(os.path.isdir(os.path.join(p, "lifeos_store", "modeller"))
+                                        for p in (os.environ.get("LIFEOS_LIB", ""), "/usr/lib/lifeos") if p)
 # Klasör ve dosya seçme: sistemin dosya seçme hizmetine (xdg-desktop-portal) sorulur; LifeOS'ta bu pencereyi
 # LifeOS Dosyalar açar. Qt'nin kendi penceresi hizmeti kullanmıyordu (19.11.2026). Ayrı süreçte: sinyali beklerken
 # arayüz donmasın.
@@ -324,7 +335,9 @@ def exe_of(agent):
 
 
 def kind_of(agent):
-    """Ajanın CLI türü: claude, codex ya da agy. Aynı türden birden çok ajan aynı hesabı (ve kotayı) kullanır."""
+    """Ajanın türü: claude, codex, agy (CLI) ya da api. Aynı türden birden çok CLI ajanı aynı hesabı (ve kotayı) kullanır."""
+    if agent.get("kind") == "api" or (agent.get("key") or "").split("-")[0] == "api":
+        return "api"
     exe = exe_of(agent)
     if exe in ("agy", "antigravity"):
         return "agy"
@@ -336,6 +349,8 @@ def kind_of(agent):
 
 def base_agent(agent):
     kind = kind_of(agent)
+    if kind == "api":
+        return API_AGENT
     return next((d for d in DEFAULTS["agents"] if d["key"] == kind),
                 next((d for d in DEFAULTS["agents"] if d["key"] == agent.get("key")), DEFAULTS["agents"][0]))
 
@@ -473,7 +488,7 @@ class Room(QObject):
             act = re.sub(r"^[^\w`(]+", "", act).strip()
             exe = exe_of(a)
             out[k] = {"state": "running" if cur else "off" if not a.get("enabled") else
-                      "missing" if not (exe and shutil.which(exe)) else "idle",
+                      "missing" if not (api_ready() if kind_of(a) == "api" else exe and shutil.which(exe)) else "idle",
                       "since": cur["t0"] if cur else 0, "act": short(act, 120),
                       "cmd": short(c.get("cmd", ""), 90), "cmdSecs": int(c.get("secs", 0)),
                       "stuck": bool(cur) and c.get("secs", 0) >= STUCK_SECS, "muted": k in muted}
@@ -959,7 +974,8 @@ class Room(QObject):
         s = json.loads(json.dumps(self._s))
         for a in s["agents"]:
             exe = shlex.split(a["command"])[0] if a["command"].strip() else ""
-            a["found"] = bool(exe and shutil.which(exe))
+            a["found"] = api_ready() if kind_of(a) == "api" else bool(exe and shutil.which(exe))
+        s["apiReady"] = api_ready()
         return s
 
     @Slot("QVariant")
@@ -1060,7 +1076,7 @@ class Room(QObject):
     def newAgent(self, kind, agents):
         """Ayarlarda "Ajan ekle": aynı CLI'dan bir ajan daha (başka model, başka çaba). Ad ve renk boşta olandan."""
         agents = agents.toVariant() if hasattr(agents, "toVariant") else (agents or [])
-        base = next((d for d in DEFAULTS["agents"] if d["key"] == kind), DEFAULTS["agents"][0])
+        base = API_AGENT if kind == "api" else next((d for d in DEFAULTS["agents"] if d["key"] == kind), DEFAULTS["agents"][0])
         a = json.loads(json.dumps(base))
         keys = {x.get("key") for x in agents}
         a["key"] = kind + "-" + uuid.uuid4().hex[:4]
@@ -1075,7 +1091,7 @@ class Room(QObject):
         a["color"] = next((c for c in self.AGENT_COLORS if c not in used), base["color"])
         a["enabled"] = True
         exe = exe_of(a)
-        a["found"] = bool(exe and shutil.which(exe))
+        a["found"] = api_ready() if kind == "api" else bool(exe and shutil.which(exe))
         return a
 
     @Slot(str, str)
@@ -1391,7 +1407,12 @@ class Room(QObject):
         if not a:
             return
         proc = QProcess(self)
-        args, stdin = self._build_cmd(dict(a), "Merhaba", False, plain=True)
+        if kind_of(a) == "api":
+            cfg = {"model": a.get("model") or "auto", "root": self._drafts(), "drafts": self._drafts(), "steps": 3,
+                   "prompt": "Merhaba. Araç kullanmadan, finish ile tek cümlelik bir selam ver."}
+            args, stdin = [sys.executable, str(API_SCRIPT), json.dumps(cfg, ensure_ascii=False)], None
+        else:
+            args, stdin = self._build_cmd(dict(a), "Merhaba", False, plain=True)
         proc.setProcessEnvironment(self._env())
         proc.setWorkingDirectory(self._workdir())
         proc.setProcessChannelMode(QProcess.MergedChannels)
@@ -1417,6 +1438,22 @@ class Room(QObject):
             self._models_for(key, a)
 
     def _models_for(self, key, a):
+        if kind_of(a) == "api":
+            p = QProcess(self)
+            def done(*_):
+                try:
+                    rows = json.loads(bytes(p.readAllStandardOutput()).decode() or "[]")
+                except (ValueError, RuntimeError):
+                    rows = []
+                if isinstance(rows, dict):
+                    rows = []
+                p.deleteLater()
+                self.modelsReady.emit(key, [{"value": "auto", "label": "Otomatik: önce yerel ve ücretsiz"}]
+                                      + [{"value": r["value"], "label": r["label"]} for r in rows],
+                                      ["low", "medium", "high"])
+            p.finished.connect(done)
+            p.start(sys.executable, [str(API_SCRIPT), "--modeller"])
+            return
         exe = exe_of(a)
         efforts = ["low", "medium", "high", "xhigh", "max"]
         if exe == "claude":
@@ -1838,7 +1875,14 @@ class Room(QObject):
         sid = self._chat["sessions"].get(key, {}).get("sid") if self._s.get("keepSessions", True) else False
         a["_newsid"] = str(uuid.uuid4())
         prompt = self._prompt_for(a, bool(sid))
-        args, stdin = self._build_cmd(a, prompt, sid)
+        if kind_of(a) == "api":
+            # API ajanı kendi kutusunu kurar (api_ajan.py): Tartışma'da yalnız taslak/ yazılabilir
+            cfg = {"model": a.get("model") or "auto", "effort": a.get("effort") or "", "root": self._workdir(),
+                   "drafts": "" if self._s.get("production") else self._drafts(), "session": sid or "",
+                   "prompt": prompt, "steps": 40}
+            args, stdin = [sys.executable, str(API_SCRIPT), json.dumps(cfg, ensure_ascii=False)], None
+        else:
+            args, stdin = self._build_cmd(a, prompt, sid)
         exe = exe_of(a)
         fmt = ("claude" if exe == "claude" and "stream-json" in args else
                "codex" if exe == "codex" and "--json" in args else
@@ -1850,6 +1894,8 @@ class Room(QObject):
         fmt = ("claude" if exe == "claude" and "stream-json" in args else
                "codex" if exe == "codex" and "--json" in args else
                "agy" if exe in ("agy", "antigravity") and "stream-json" in args else "text")
+        if kind_of(a) == "api":
+            fmt = "api"
         if fmt == "codex" and args[1:2] == ["exec"]:
             # codex app-server: tur sürerken gelen mesajlar turn/steer ile aynı tura eklenir
             fmt, args, stdin = "cxs", [args[0], "app-server"] + self._codex_lean(), None
@@ -2264,6 +2310,31 @@ class Room(QObject):
             cur["proc"].kill()
 
     # --- antigravity stream-json ---
+    # --- API ajanı (api_ajan.py) ---
+    def _ev_api(self, cur, ev):
+        t = ev.get("t")
+        if t == "session":
+            cur["new_sid"] = ev.get("id")
+            if ev.get("model") and ev["model"] != cur["agent"].get("model"):
+                self._act(cur, "◇ model: " + ev["model"])
+        elif t == "step":
+            name, _, rest = (ev.get("text") or "").partition(" ")
+            try:
+                args = json.loads(rest) if rest else {}
+            except ValueError:
+                args = {}
+            shown = args.get("path") or args.get("command") or args.get("pattern") or rest
+            icon = {"write_file": "✎", "edit_file": "✎", "read_file": "📖", "run": "⚙", "list_dir": "📂", "search": "🔍"}.get(name, "•")
+            self._act(cur, f"{icon} {name}  {short(shown, 140)}")
+            if name in ("write_file", "edit_file") and args.get("path"):
+                self._file(cur, args["path"])
+        elif t == "text" and ev.get("text"):
+            cur["texts"].append(ev["text"])
+        elif t == "result":
+            cur["final"] = ev.get("text") or ""
+        elif t == "error":
+            cur["error"] = ev.get("text") or "hata"
+
     def _ev_agy(self, cur, ev):
         e = ev.get("event")
         if e == "init":
