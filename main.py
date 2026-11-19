@@ -652,6 +652,31 @@ class Room(QObject):
                 continue
         return out
 
+    def _live_files(self):
+        """Tur sürerken üretilenler: panel tur bitmesini beklemesin (Claude bir turda onlarca resim çizebiliyor).
+        Klasör ~10 sn'de bir yoklanır; ilk fotoğraftan sonra oluşan ya da değişen dosyalar listeye girer. Kimin
+        yazdığı tek ajan çalışıyorsa odur; tur sonundaki "📝 Projede…" satırı gerekirse düzeltir."""
+        self._live_tick = getattr(self, "_live_tick", 0) + 1
+        base = getattr(self, "_snap", None)
+        if self._live_tick % 3 or base is None or self._snap_wd != self._workdir():
+            return
+        now = self._scan()
+        if now is None:
+            return
+        wd = self._workdir()
+        who = self._running[next(iter(self._running))]["agent"]["name"] if len(self._running) == 1 else ""
+        files = self._chat.setdefault("files", {})
+        seen = self.__dict__.setdefault("_live_seen", {})
+        for rel, sig in now.items():
+            if base.get(rel) == sig or seen.get(rel) == sig:
+                continue
+            seen[rel] = sig
+            p = os.path.join(wd, rel)
+            if not file_kind(p) or NOISE_RE.search(p):
+                continue
+            if p not in files or files[p].get("t", 0) < time.time() - 5:
+                self._note_file(p, who or (files.get(p) or {}).get("who", ""), "yeni" if rel not in base else "değişti")
+
     @Slot(str)
     def cutCommand(self, key):
         """Ajanın takılan komutunu (ajanı değil) durdur: ajan komutun bittiğini görür ve devam eder."""
@@ -700,6 +725,7 @@ class Room(QObject):
             return
         self._was_running = True
         now = time.time()
+        self._live_files()
         cmds = {}
         for k, cur in self._running.items():
             shells = self._shell_cmds(cur)
