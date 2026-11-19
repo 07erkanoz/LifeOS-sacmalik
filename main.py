@@ -61,6 +61,19 @@ PACT_TALK = ("Bir kararı ortak diye aktarırken kimin hangi öneriyi destekledi
 PACT_PROD = ("Üretimde bir işe başlamadan hangi parçayı üstlendiğinizi odada kısaca söyleyin. "
              "Başkasının yazdığını silmeden ya da üzerine yazmadan önce onun açık onayını alın.")
 # kota dolunca CLI'ların yazdığı hata (Ekip'teki desen)
+# Yeni bilgi taşımayan kısa onay/bekleme mesajı ("Tamam.", "👍", "Claude'u bekliyorum."): boşta duran
+# ajanı uyandırmaz, çalışan ajana araya yazılmaz; ajanlar onu bir sonraki çağrılarında dökümde görür.
+ACK_RE = re.compile(r"\bbekl[ei]|\btamam(dır)?\b|\banlaşıldı|\banladım|👍|\bsürüyor|\bhazırı[mz]\b|\bsessiz", re.I)
+ACK_NOT = re.compile(r"`|\]\(|https?://|\w\.(js|py|html|css|md|png|svg)\b|üstlen|tamamlandı|bitti|hazır\b|kaydedildi", re.I)
+
+
+def is_ack(text):
+    t = (text or "").strip()
+    if len(t) > 160 or "?" in t or ACK_NOT.search(t):
+        return False      # soru, dosya, bağlantı, üstlenme ya da bitti haberi taşıyan mesaj bilgi sayılır
+    return bool(ACK_RE.search(t))
+
+
 LIMIT_ERROR = re.compile(r"rate.?limit|usage limit|quota|limit reached|hit your limit|resource.?exhausted|\b429\b|kota", re.I)
 HEADER_VER = 6      # oda bilgisi değişince sürmekte olan oturumlara da bir kez gönderilir
 # sohbette gösterilecek ajan çıktıları: resimler önizlenir, diğerleri tıklayınca açılır
@@ -591,7 +604,9 @@ class Room(QObject):
         return self._chat.setdefault("seen", {}).get(key, 0)
 
     def _has_unseen(self, a):
+        user = self._s["userName"]
         return any(m["name"] != a["name"] and m["key"] != "system"
+                   and (m["name"] == user or not is_ack(m["text"]))
                    for m in self._transcript()[self._seen(a["key"]):])
 
     def _schedule(self):
@@ -746,6 +761,8 @@ class Room(QObject):
             return     # sınır doldu: ajanlar arası canlı iletim de durur; sen yazınca kaldıkları yerden alırlar
         if not self._s.get("liveRelay", True) and author != self._s["userName"]:
             return     # canlı iletim kapalı: ajanlar birbirini sıraları gelince toplu okur (kota için); senin sözün yine anında gider
+        if author != self._s["userName"] and is_ack(text):
+            return     # kısa onay/bekleme: çalışanı bölmeye değmez, sonraki çağrıda dökümde görülür
         for cur in self._running.values():
             if not cur.get("live_in") or cur.get("in_closed") or cur.get("stale") or cur["agent"]["name"] == author:
                 continue
@@ -1219,6 +1236,11 @@ class Room(QObject):
                 if c.get("type") == "text" and c.get("text", "").strip():
                     cur["texts"].append(c["text"].strip())
                     self.messageUpdated.emit(cur["id"], "\n\n".join(cur["texts"]))
+                    if cur.pop("reply_due", False):
+                        # iş sürerken araya yazılan mesaja verdiği cevap: tur sonunu beklemeden odaya düşsün,
+                        # yoksa yalnızca son metin kalır ve diğerleri bu cevabı hiç görmez
+                        cur["published"] = cur["texts"][-1]
+                        self._publish_turn(cur, cur["texts"][-1], count=False)
                 elif c.get("type") == "tool_use":
                     inp = c.get("input") or {}
                     what = (inp.get("file_path") or inp.get("path") or inp.get("command")
@@ -1238,6 +1260,8 @@ class Room(QObject):
             for line in [x for x in cur.get("pending_inj", []) if x in c]:
                 cur["pending_inj"].remove(line)
                 self._delivered(cur, cur["inj_n"].pop(line, cur["seen"]))
+                if not line.startswith("Oda: "):
+                    cur["reply_due"] = True
                 self._act(cur, "↩ " + short(line, 80))
         elif t == "rate_limit_event":
             info = ev.get("rate_limit_info") or {}
@@ -1255,6 +1279,8 @@ class Room(QObject):
             r = (ev.get("result") or "").strip()
             if ev.get("is_error"):
                 cur["error"] = r or "hata"
+            elif r and r == cur.pop("published", None):
+                r = ""      # bu metin ara cevap olarak zaten odaya düştü
             for d in ev.get("permission_denials") or []:
                 cur["denied"].append(d.get("tool_name", "?"))
             if cur.get("live_in") and cur.get("pending_inj") and not ev.get("is_error"):
@@ -1723,7 +1749,7 @@ class Room(QObject):
         self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, text, True, 0, emit=True)
         self._save_chat()
 
-    def _publish_turn(self, cur, text):
+    def _publish_turn(self, cur, text, count=True):
         """Açık kalan süreçte bir tur bitti: cevabı odaya koy, sonraki tur için yeni balon aç."""
         a, key = cur["agent"], cur["agent"]["key"]
         dt = time.time() - cur["t0"]
@@ -1732,7 +1758,8 @@ class Room(QObject):
             self._attach_media(cur, cur["id"], text)
             self.messageUpdated.emit(cur["id"], text)
             self.messageDone.emit(cur["id"], True, dt)
-            self._calls += 1      # açık süreçteki her yeni tur da bir çağrı sayılır
+            if count:
+                self._calls += 1      # açık süreçteki her yeni tur da bir çağrı sayılır
             self._log("turn", id=cur["id"], agent=a["name"], secs=round(dt, 1), call=self._calls)
             cur["id"] = uuid.uuid4().hex
             self.messageAdded.emit(cur["id"], key, a["name"], a["color"], "", True, time.strftime("%H:%M"))
