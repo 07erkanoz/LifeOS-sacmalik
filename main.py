@@ -891,6 +891,34 @@ class Room(QObject):
         p.errorOccurred.connect(lambda e: e == QProcess.FailedToStart and self.pickFailed.emit(mode))
         p.start(sys.executable, ["-c", PORTAL_PICK, mode, title])
 
+    @Slot(str, str, result=str)
+    def resolveFile(self, path, text):
+        """Mesajdaki bağlantının gerçek yolu. Ajanlar çoğu zaman yalnız dosya adını yazar ("sayfa.png"), klasörünü
+        aynı mesajda ayrıca anar ("taslak/tas_seti/"): önce o klasörlerde, sonra proje içinde (en yenisi) aranır."""
+        wd = self.chatDir
+        path = os.path.expanduser(path or "")
+        if os.path.isabs(path) and os.path.exists(path):
+            return path
+        rel = path[len(wd):].lstrip("/") if path.startswith(wd + "/") else path.lstrip("./")
+        tries = [os.path.join(wd, rel)]
+        for d in re.findall(r"`?((?:~|/)?[\w.\-/]+/)`?", text or ""):
+            d = os.path.expanduser(d)
+            tries.append(os.path.join(d if os.path.isabs(d) else os.path.join(wd, d), os.path.basename(rel)))
+        for c in tries:
+            if os.path.isfile(c):
+                return os.path.normpath(c)
+        name, best, n = os.path.basename(rel), None, 0
+        for d, dirs, files in os.walk(wd):
+            dirs[:] = [x for x in dirs if x not in self.SNAP_SKIP and not x.startswith(".")]
+            n += len(files)
+            if n > 20000:
+                break
+            if name in files:
+                f = os.path.join(d, name)
+                if best is None or os.path.getmtime(f) > os.path.getmtime(best):
+                    best = f
+        return best or ""
+
     @Slot(str, result=bool)
     def isDir(self, path):
         return os.path.isdir(os.path.expanduser(path))

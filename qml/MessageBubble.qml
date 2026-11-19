@@ -17,7 +17,7 @@ Item {
         if (!t) return t
         // kod olarak yazılmış SVG görsel aşağıda gösteriliyor: kodu katla
         t = t.replace(/```[\w-]*\n\s*(?:<\?xml[^>]*>\s*)?<svg\b[\s\S]*?```/gi, "*🖼 SVG görsel — aşağıda*")
-        var base = (cfg.workDir || "").replace(/\/$/, "")
+        var base = (room.chatDir || cfg.workDir || "").replace(/\/$/, "")
         function url(u) {
             if (/^https?:\/\//i.test(u)) return u
             if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?/i.test(u)) return "http://" + u
@@ -67,6 +67,10 @@ Item {
         if (/^file:\/\//.test(l)) {
             var f = decodeURIComponent(l.replace(/^file:\/\//, ""))
             if (f.charAt(0) === "~") f = room.homeDir + f.slice(1)
+            // yalnız adı yazılmış dosya: mesajda anılan klasörde ya da projede ara
+            var real = room.resolveFile(f, model.body)
+            if (!real) { win.status = "Dosya bulunamadı: " + f.replace(/^.*\//, ""); return }
+            f = real
             if (/\.(png|jpe?g|gif|webp|svg|bmp|avif|mp4|webm|mov|mkv|ogv)$/i.test(f)) win.showImage(f)
             else Qt.openUrlExternally("file://" + f)
         } else if (l.charAt(0) === "/") openLink("file://" + l)
