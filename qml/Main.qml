@@ -18,6 +18,8 @@ ApplicationWindow {
     function toggleMax() { maxed ? showNormal() : showMaximized() }
     Binding { target: Theme; property: "dark"; value: (cfg.theme || "dark") !== "light" }
     Binding { target: Theme; property: "scale"; value: cfg.fontScale || 1.0 }
+    // sohbet sütunu: kenarlarda dar bir pay bırakıp genişler; 2K ve üstü ekranlarda satırlar aşırı uzamasın
+    Binding { target: Theme; property: "column"; value: Math.max(560, Math.min(1500 * Theme.scale, chat.width - 56)) }
     function setScale(v) {
         v = Math.round(Math.min(1.6, Math.max(0.8, v)) * 10) / 10
         var s = cfg; s.fontScale = v; room.saveSettings(s)
@@ -168,27 +170,36 @@ ApplicationWindow {
     DropArea {
         anchors.fill: parent
         z: 800
-        onDropped: function(drop) { if (drop.hasUrls) { win.addAttachments(drop.urls); drop.accept() } }
+        onDropped: function(drop) {
+            if (!drop.hasUrls) return
+            var first = decodeURIComponent(String(drop.urls[0]).replace(/^file:\/\//, ""))
+            // tek bir klasör bırakıldıysa: o projeyi odaya aç; dosyalar ek olur
+            if (drop.urls.length === 1 && room.isDir(first)) room.setProjectDir(first)
+            else win.addAttachments(drop.urls)
+            drop.accept()
+        }
         Rectangle {
             anchors.fill: parent; anchors.margins: 14; radius: 20
             visible: parent.containsDrag
             color: Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.12)
             border.color: Theme.user; border.width: 2
-            Text { anchors.centerIn: parent; text: "📎  Bırak, odaya eklensin"; color: Theme.text; font.pixelSize: Theme.fs(20); font.weight: Font.DemiBold }
+            Text { anchors.centerIn: parent; text: "📎  Bırak: dosya ek olur, klasör proje olarak açılır"; color: Theme.text; font.pixelSize: Theme.fs(20); font.weight: Font.DemiBold }
         }
     }
 
     // proje klasörü seçici (ajanlar bu klasörde çalışır / üretir)
     property var folderTarget: null   // null => doğrudan kaydet, aksi halde callback
-    function pickFolder(cb) { folderTarget = cb || null; folderDlg.open() }
+    // klasör ve dosya seçme pencerelerini sistemin hizmeti açar (LifeOS'ta LifeOS Dosyalar); yoksa Qt'nin penceresi
+    function pickFolder(cb) { folderTarget = cb || null; room.pick("folder") }
+    function pickFiles() { room.pick("files") }
     FolderDialog {
         id: folderDlg
         title: "Proje klasörünü seç"
-        currentFolder: "file://" + cfg.workDir
+        currentFolder: "file://" + room.chatDir
         onAccepted: {
             var path = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
             if (win.folderTarget) win.folderTarget(path)
-            else { var s = cfg; s.workDir = path; room.saveSettings(s) }
+            else room.setProjectDir(path)
         }
     }
 
@@ -239,6 +250,12 @@ ApplicationWindow {
             Qt.callLater(chat.positionViewAtEnd)
         }
         function onStatusText(t) { win.status = t }
+        function onPicked(mode, paths) {
+            if (mode === "files") { win.addAttachments(paths); return }
+            if (win.folderTarget) win.folderTarget(paths[0])
+            else room.setProjectDir(paths[0])
+        }
+        function onPickFailed(mode) { if (mode === "files") fileDlg.open(); else folderDlg.open() }
     }
 
     // arka plan: koyu zemin, üstte ajan renklerinden çok hafif bir ışık
@@ -382,8 +399,9 @@ ApplicationWindow {
                             Text { width: parent.width; text: hi.modelData.title; elide: Text.ElideRight
                                    color: hi.current ? Theme.text : Theme.textDim; font.pixelSize: Theme.fs(12)
                                    font.weight: hi.current ? Font.DemiBold : Font.Normal }
-                            Text { text: Qt.formatDateTime(new Date(hi.modelData.updated * 1000), "d MMM HH:mm")
-                                         + "  ·  " + hi.modelData.count + " mesaj"
+                            Text { width: parent.width; elide: Text.ElideRight
+                                   text: Qt.formatDateTime(new Date(hi.modelData.updated * 1000), "d MMM HH:mm")
+                                         + "  ·  " + hi.modelData.count + " mesaj" + (hi.modelData.dir ? "  ·  📁 " + hi.modelData.dir : "")
                                    color: Theme.muted; font.pixelSize: Theme.fs(10) }
                         }
                         // yerinde ad değiştirme: Enter kaydeder, Esc vazgeçer
@@ -537,13 +555,14 @@ ApplicationWindow {
                         ToolTip.text: (room.jailOk ? "" : "⚠ Tartışmada dosya üretimi kullanılamıyor: bu makinede kutu (bubblewrap) kurulamadı.\n") + "Tartışma: sistem ve proje dosyaları yalnızca okunur; ajanlar terminali kullanabilir, resim, belge ve taslakları proje içindeki taslak/ klasörüne yazabilir.\nÜretim: yazabilir ve (izinli) komut çalıştırabilirler.\nMod değişince odaya kısa bir bilgi satırı düşer; yeni sohbet Tartışma ile açılır."
                     }
 
+                    // proje klasörü: her zaman görünür (dar alanda yalnız ad kısalır)
                     GhostButton {
-                        visible: !topRow.tight
-                        text: "📁  " + cfg.workDir.replace(/^.*\//, "")
+                        text: "📁  " + room.chatDir.replace(/\/$/, "").replace(/^.*\//, "")
                         enabled: !room.busy
-                        implicitWidth: Math.min(topRow.tight ? 120 : 220, contentItem.implicitWidth + 24)
+                        implicitWidth: Math.min(topRow.tight ? 110 : 220, contentItem.implicitWidth + 24)
                         onClicked: win.pickFolder()
-                        ToolTip.visible: hovered; ToolTip.text: "Proje klasörü: " + cfg.workDir + "\nDeğiştirmek için tıkla"
+                        ToolTip.visible: hovered
+                        ToolTip.text: "Proje klasörü: " + room.chatDir + "\nVar olan bir projeyi açmak için tıkla (ya da klasörü pencereye sürükle)"
                     }
 
                     Text {
@@ -682,6 +701,14 @@ ApplicationWindow {
                 }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 0
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 0
             ListView {
                 id: chat
                 Layout.fillWidth: true
@@ -724,7 +751,38 @@ ApplicationWindow {
                         }
                     }
                     Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Bir konu aç"; color: Theme.text; font.pixelSize: Theme.fs(22); font.bold: true }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: (win.enabledAgents.length === 1 ? win.enabledAgents[0].name + " odada." : "Hepsi odada.") + (room.roles.on ? " Bu sohbette iş bölümü var." : " Kimseye rol verilmedi."); color: Theme.muted; font.pixelSize: Theme.fs(13) }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: (win.enabledAgents.length === 1 ? win.enabledAgents[0].name + " odada." : "Hepsi odada.") + (room.roles.on ? " Bu sohbette iş bölümü var." : " Kimseye rol verilmedi.")
+                           color: Theme.muted; font.pixelSize: Theme.fs(13) }
+                    // var olan bir projeyle başla: klasör seç ya da son kullanılanlardan
+                    Column {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        topPadding: 10; spacing: 10
+                        GhostButton {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: "📁  Proje: " + room.chatDir.replace(/\/$/, "").replace(/^.*\//, "") + "   ·   Başka bir proje klasörü seç"
+                            implicitWidth: contentItem.implicitWidth + 32; implicitHeight: 36
+                            onClicked: win.pickFolder()
+                        }
+                        Flow {
+                            visible: room.recentDirs.length > 0
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: Math.min(560, chat.width - 80)
+                            spacing: 6
+                            Repeater {
+                                model: room.recentDirs.filter(function(d) { return d.path !== room.chatDir })
+                                Rectangle {
+                                    implicitWidth: rdT.implicitWidth + 22; implicitHeight: 28; radius: 14
+                                    color: rdM.containsMouse ? Theme.cardHi : "transparent"; border.color: Theme.line
+                                    Text { id: rdT; anchors.centerIn: parent; text: modelData.name; color: Theme.textDim; font.pixelSize: Theme.fs(11.5) }
+                                    MouseArea { id: rdM; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                onClicked: room.setProjectDir(modelData.path) }
+                                    ToolTip.visible: rdM.containsMouse; ToolTip.delay: 400; ToolTip.text: modelData.path
+                                }
+                            }
+                        }
+                        Text { anchors.horizontalCenter: parent.horizontalCenter; color: Theme.muted; font.pixelSize: Theme.fs(11)
+                               text: "Klasörü pencereye sürükleyip bırakabilirsiniz" }
+                    }
                 }
             }
 
@@ -806,7 +864,7 @@ ApplicationWindow {
                                    rotation: clipMa.containsMouse ? -20 : 0
                                    Behavior on rotation { NumberAnimation { duration: 200; easing.type: Easing.OutBack } } }
                             MouseArea { id: clipMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                        onClicked: fileDlg.open() }
+                                        onClicked: win.pickFiles() }
                             ToolTip.visible: clipMa.containsMouse; ToolTip.delay: 400
                             ToolTip.text: "Dosya ya da resim ekle (Ctrl+V ile yapıştır, pencereye sürükle-bırak)"
                         }
@@ -874,16 +932,18 @@ ApplicationWindow {
                     color: Theme.muted; font.pixelSize: Theme.fs(11)
                 }
             }
+                }
+                // ---------------- sağ: durum paneli (üst çubuğun altında; pencere düğmeleri kenarda kalır) ----------------
+                StatusPanel {
+                    Layout.fillHeight: true
+                    Layout.preferredWidth: implicitWidth
+                    // dar pencerede yalnız şerit: sohbet sığsın
+                    open: cfg.panelOpen !== false && win.width >= 1100
+                    onToggle: if (win.width >= 1100) win.togglePanel(); else win.status = "Paneli açmak için pencereyi genişletin"
+                }
+            }
         }
 
-        // ---------------- sağ: durum paneli ----------------
-        StatusPanel {
-            Layout.fillHeight: true
-            Layout.preferredWidth: implicitWidth
-            // dar pencerede yalnız şerit: sohbet sığsın
-            open: cfg.panelOpen !== false && win.width >= 1100
-            onToggle: if (win.width >= 1100) win.togglePanel(); else win.status = "Paneli açmak için pencereyi genişletin"
-        }
     }
 
     RolesDialog { id: rolesDlg }

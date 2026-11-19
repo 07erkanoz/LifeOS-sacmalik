@@ -135,7 +135,7 @@ Drawer {
                             Text {
                                 Layout.fillWidth: true; wrapMode: Text.WordWrap
                                 color: Theme.textDim; font.pixelSize: Theme.fs(12)
-                                text: "Oda anlaşması: Tartışma'da ilk mesajla \"ortak karar diye aktarırken kimin desteklediğini belirtin\", Üretim ilk açılınca \"üstlendiğin parçayı söyle, başkasının yazdığını onaysız ezme\" satırı odaya görünür düşer"
+                                text: "Oda anlaşması: Tartışma'da ilk mesajla \"ortak karar diye aktarırken kimin desteklediğini belirtin\", Üretim ilk açılınca \"üstlendiğin parçayı söyle, başkasının yazdığını onaysız ezme; başkasının alanındaki işi sahibinden iste, kullandığın girdiyi söyle, uzun işte ara durum ver\" satırı odaya görünür düşer"
                             }
                         }
                         RowLayout {

@@ -61,6 +61,11 @@ PACT_TALK = ("Bir kararı ortak diye aktarırken kimin hangi öneriyi destekledi
              "sessiz kalan biri onay vermiş sayılmaz.")
 PACT_PROD = ("Üretimde bir işe başlamadan hangi parçayı üstlendiğinizi odada kısaca söyleyin. "
              "Başkasının yazdığını silmeden ya da üzerine yazmadan önce onun açık onayını alın.")
+# 19.11.2026: Claude görseli ve kodu tek başına, odadaki görselleri kullanmadan yazdı; diğerleri yalnız bekledi
+PACT_HELP = ("Başkasının alanına giren bir şeye (görsel, kod, ses, veri) ihtiyacınız olursa onu yapmak yerine "
+             "işin sahibinden isteyin. İşe başlarken hangi girdiyi (taslak, görsel, sözleşme) kullanacağınızı söyleyin. "
+             "Birkaç dakikadan uzun süren işte arada kısa bir durum yazın.")
+PACT_VER = 2      # anlaşma büyüyünce süren sohbetlere yalnız yenisi bir kez yazılır
 # kota dolunca CLI'ların yazdığı hata (Ekip'teki desen)
 # Yeni bilgi taşımayan kısa onay/bekleme mesajı ("Tamam.", "👍", "Claude'u bekliyorum."): boşta duran
 # ajanı uyandırmaz, çalışan ajana araya yazılmaz; ajanlar onu bir sonraki çağrılarında dökümde görür.
@@ -145,13 +150,50 @@ TASKS = [
 TASK_BY_TITLE = {x["title"].lower(): x for x in TASKS}
 # üretilen dosyalar: panelde türüne göre ayrılır
 IMG_EXT = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif", "mp4", "webm", "mov", "mkv", "ogv"}
+VIDEO_EXT = {"mp4", "webm", "mov", "mkv", "ogv"}
+AUDIO_EXT = {"mp3", "wav", "ogg", "oga", "flac", "m4a", "opus", "aac"}
 CODE_EXT = {"py", "js", "mjs", "ts", "tsx", "jsx", "dart", "qml", "c", "cc", "cpp", "h", "hpp", "rs", "go", "java",
             "kt", "swift", "sh", "bash", "zsh", "css", "scss", "html", "htm", "vue", "svelte", "lua", "rb", "php",
             "sql", "glsl", "frag", "vert", "cs", "gd"}
 DOC_EXT = {"md", "txt", "pdf", "json", "yaml", "yml", "toml", "csv", "tsv", "docx", "odt", "xlsx", "ods", "rtf",
-           "udf", "xml", "mp3", "wav", "ogg", "flac"}
+           "udf", "xml"}
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
-STUCK_SECS = 240        # bir komut bu kadar sürerse panel "takılmış olabilir" der
+# panelde gösterilmeyen yollar: proje şablonlarının ve derlemenin ürettikleri (uygulama simgeleri, derleme çıktısı)
+NOISE_RE = re.compile(r"/(?:build|\.dart_tool|node_modules|\.gradle|Pods|DerivedData|__pycache__|\.venv|venv|dist|"
+                      r"mipmap-[^/]+|drawable[^/]*|[^/]+\.xcassets|web/icons|\.git)/")
+STUCK_SECS = 240
+# Klasör ve dosya seçme: sistemin dosya seçme hizmetine (xdg-desktop-portal) sorulur; LifeOS'ta bu pencereyi
+# LifeOS Dosyalar açar. Qt'nin kendi penceresi hizmeti kullanmıyordu (19.11.2026). Ayrı süreçte: sinyali beklerken
+# arayüz donmasın.
+PORTAL_PICK = r"""
+import sys, json, uuid
+import gi
+gi.require_version("Gio", "2.0")
+from gi.repository import Gio, GLib
+mode, title = sys.argv[1], sys.argv[2]
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+token = "sacmalik" + uuid.uuid4().hex[:8]
+sender = bus.get_unique_name()[1:].replace(".", "_")
+path = "/org/freedesktop/portal/desktop/request/%s/%s" % (sender, token)
+loop = GLib.MainLoop()
+out = {"ok": False, "uris": []}
+def resp(conn, snd, obj, iface, sig, params):
+    code, res = params.unpack()
+    out["ok"] = code == 0
+    out["uris"] = list(res.get("uris", []))
+    loop.quit()
+bus.signal_subscribe("org.freedesktop.portal.Desktop", "org.freedesktop.portal.Request", "Response", path, None,
+                     Gio.DBusSignalFlags.NONE, resp)
+opts = {"handle_token": GLib.Variant("s", token), "modal": GLib.Variant("b", True)}
+if mode == "folder":
+    opts["directory"] = GLib.Variant("b", True)
+if mode == "files":
+    opts["multiple"] = GLib.Variant("b", True)
+bus.call_sync("org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser",
+              "OpenFile", GLib.Variant("(ssa{sv})", ("", title, opts)), None, Gio.DBusCallFlags.NONE, -1, None)
+loop.run()
+print(json.dumps(out))
+"""        # bir komut bu kadar sürerse panel "takılmış olabilir" der
 # sohbette gösterilecek ajan çıktıları: resimler önizlenir, diğerleri tıklayınca açılır
 MEDIA_EXT = ("png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif",
              "mp4", "webm", "mov", "mkv", "ogv", "mp3", "wav", "ogg", "html", "htm", "pdf")
@@ -237,7 +279,8 @@ DEFAULTS = {
    
     "theme": "dark",
     "panelOpen": True,      # sağdaki durum paneli açık mı (hatırlanır)
-    "roleTemplates": [],    # kullanıcının kaydettiği rol şablonları: [{id, name, roles: [{title, talk, prod}]}]
+    "roleTemplates": [],
+    "recentDirs": [],       # son kullanılan proje klasörleri (en yenisi önce)    # kullanıcının kaydettiği rol şablonları: [{id, name, roles: [{title, talk, prod}]}]
     "fontScale": 1.0,       # yazı boyutu çarpanı (0.8–1.6)        # "dark" ya da "light"; üst çubuktaki düğmeyle değişir, hatırlanır
     "keepSessions": True,
     "workDir": str(DATA_DIR / "oda"),
@@ -299,7 +342,8 @@ def base_agent(agent):
 
 def file_kind(path):
     ext = path.lower().rsplit(".", 1)[-1] if "." in os.path.basename(path) else ""
-    return "image" if ext in IMG_EXT else "code" if ext in CODE_EXT else "doc" if ext in DOC_EXT else ""
+    return ("image" if ext in IMG_EXT else "audio" if ext in AUDIO_EXT else "code" if ext in CODE_EXT
+            else "doc" if ext in DOC_EXT else "")
 
 
 def strip_echo(text, me, others):
@@ -362,6 +406,8 @@ class Room(QObject):
     statusChanged = Signal()                                # ajanların anlık durumu (panel)
     filesChanged = Signal()                                 # bu sohbette üretilen dosyalar (panel)
     rolesChanged = Signal()
+    picked = Signal(str, "QVariantList")                    # tür (folder/files), seçilen yollar
+    pickFailed = Signal(str)                                # hizmet yok: arayüz kendi penceresini açar
 
     def __init__(self):
         super().__init__()
@@ -440,19 +486,47 @@ class Room(QObject):
         wd = self._workdir()
         out = []
         for path, f in (self._chat.get("files") or {}).items():
-            if not os.path.isfile(path) or "/__pycache__/" in path or "/." in path.replace(wd, ""):
+            if not os.path.isfile(path) or NOISE_RE.search(path) or "/." in path.replace(wd, ""):
                 continue
             kind = file_kind(path)
             if not kind:
                 continue
             rel = os.path.relpath(path, wd) if path.startswith(wd + os.sep) else path
-            out.append({"path": path, "name": os.path.basename(path), "dir": os.path.dirname(rel) if rel != path else
+            ext = path.rsplit(".", 1)[-1].lower()
+            out.append({"path": path, "name": os.path.basename(path), "video": ext in VIDEO_EXT,
+                        "thumb": self._thumb(path) if ext in VIDEO_EXT else "", "size": os.path.getsize(path), "dir": os.path.dirname(rel) if rel != path else
                         os.path.dirname(path).replace(str(Path.home()), "~"), "inside": rel != path,
                         "kind": kind, "ext": path.rsplit(".", 1)[-1].lower(), "who": f.get("who", ""),
                         "color": colors.get(f.get("who", ""), SYSTEM_COLOR), "t": f.get("t", 0),
                         "change": f.get("change", "yeni")})
         out.sort(key=lambda x: x["t"], reverse=True)
         return out
+
+    def _thumb(self, path):
+        """Videonun küçük resmi (ilk saniyeden bir kare): yoksa arka planda ffmpeg ile üretilir, hazır olunca panel yenilenir."""
+        import hashlib
+        try:
+            st = os.stat(path)
+        except OSError:
+            return ""
+        d = MEDIA_DIR / "kucuk"
+        f = d / (hashlib.sha1(f"{path}{st.st_mtime_ns}".encode()).hexdigest()[:16] + ".jpg")
+        if f.exists():
+            return str(f)
+        busy = self.__dict__.setdefault("_thumbing", set())
+        if str(f) not in busy and shutil.which("ffmpeg"):
+            busy.add(str(f))
+            d.mkdir(parents=True, exist_ok=True)
+            p = QProcess(self)
+            def done(*_):
+                busy.discard(str(f))
+                p.deleteLater()
+                if f.exists():
+                    self.filesChanged.emit()
+            p.finished.connect(done)
+            p.start("ffmpeg", ["-y", "-loglevel", "error", "-ss", "0.5", "-i", path, "-frames:v", "1",
+                               "-vf", "scale=360:-2", str(f)])
+        return ""
 
     def _note_file(self, path, who, change):
         files = self._chat.setdefault("files", {})
@@ -467,9 +541,17 @@ class Room(QObject):
 
     def _rebuild_files(self):
         """Eski sohbetler: dosya listesini odadaki "📝 Projede …" satırlarından ve ajanların medyasından çıkar."""
-        if "files" in self._chat:
-            return
         wd = self._chat.get("workDir") or self._s["workDir"]
+        if "files" in self._chat:
+            # sonradan eklenen kural: ajanın mesajında gösterdiği ama listede olmayan dosyalar (komutla üretilen ses, video)
+            files = self._chat["files"]
+            for m in self._chat["messages"]:
+                if m.get("key") not in ("system", "user"):
+                    for p in m.get("media") or []:
+                        if not p.startswith((str(MEDIA_DIR), str(ATTACH_DIR))) and p not in files:
+                            files[p] = {"who": m["name"], "t": m.get("ts") or 0, "change": "yeni"}
+            self._backfill_media(files, wd)
+            return
         files = {}
         for m in self._chat["messages"]:
             t = m.get("ts") or 0
@@ -490,7 +572,35 @@ class Room(QObject):
         # zaman bilgisi olmayan eski kayıtlar: sıralama mesaj sırasından gelsin
         for i, f in enumerate(files.values()):
             f["t"] = f["t"] or i
+        self._backfill_media(files, wd)
         self._chat["files"] = files
+
+    def _backfill_media(self, files, wd):
+        """Sohbet başladıktan sonra klasörde oluşan resim, ses ve videolar: ajan onları komutla üretip mesajında
+        anmamış ya da uygulama o sırada eski sürümdeyken üretilmiş olabilir. Kimin ürettiği bilinmiyorsa boş kalır."""
+        since = float(self._chat.get("created") or 0)
+        if not since or not os.path.isdir(wd):
+            return
+        n = 0
+        for d, dirs, names in os.walk(wd):
+            dirs[:] = [x for x in dirs if x not in self.SNAP_SKIP and not x.startswith(".")]
+            for f in names:
+                n += 1
+                if n > 20000:
+                    return
+                p = os.path.join(d, f)
+                if p in files or file_kind(p) not in ("image", "audio") or NOISE_RE.search(p):
+                    continue
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    continue
+                if mt >= since:
+                    # ajanlar dosyalarını çoğu zaman kendi adıyla başlatır (claude_…, codex_…)
+                    rel = os.path.relpath(p, wd).lower()
+                    who = next((a["name"] for a in self._s["agents"]
+                                if any(part.startswith(a["name"].lower().split()[0]) for part in rel.split(os.sep))), "")
+                    files[p] = {"who": who, "t": mt, "change": "yeni"}
 
     @Slot(str)
     def stopAgent(self, key):
@@ -742,10 +852,79 @@ class Room(QObject):
             except (OSError, ValueError):
                 continue
             out.append({"id": c["id"], "title": c.get("title") or "(başlıksız)",
+                        "dir": os.path.basename((c.get("workDir") or "").rstrip("/")),
                         "updated": c.get("updated", 0),
                         "count": len(c.get("messages", []))})
         out.sort(key=lambda c: c["updated"], reverse=True)
         return out
+
+    # ================= proje klasörü =================
+    @Property(str, notify=chatsChanged)
+    def chatDir(self):
+        """Bu sohbetin proje klasörü: ajanlar burada çalışır, ürettiklerini buraya yazar."""
+        return os.path.expanduser(self._chat.get("workDir") or self._s["workDir"])
+
+    @Property("QVariantList", notify=settingsChanged)
+    def recentDirs(self):
+        return [{"path": d, "name": os.path.basename(d.rstrip("/")) or d} for d in self._s.get("recentDirs") or []
+                if os.path.isdir(d)][:6]
+
+    @Slot(str)
+    def pick(self, mode):
+        """Klasör ya da dosya seçtir: pencereyi sistemin dosya seçme hizmeti (LifeOS'ta LifeOS Dosyalar) açar."""
+        title = "Proje klasörünü seç" if mode == "folder" else "Odaya dosya ekle"
+        p = QProcess(self)
+        p.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
+        def done(code, _s):
+            try:
+                out = json.loads(bytes(p.readAllStandardOutput()).decode() or "{}")
+            except (ValueError, RuntimeError):
+                out = None
+            p.deleteLater()
+            if code != 0 or out is None:
+                self.pickFailed.emit(mode)
+                return
+            paths = [QUrl(u).toLocalFile() for u in out.get("uris", []) if u.startswith("file://")]
+            if out.get("ok") and paths:
+                self.picked.emit(mode, paths)
+        p.finished.connect(done)
+        p.errorOccurred.connect(lambda e: e == QProcess.FailedToStart and self.pickFailed.emit(mode))
+        p.start(sys.executable, ["-c", PORTAL_PICK, mode, title])
+
+    @Slot(str, result=bool)
+    def isDir(self, path):
+        return os.path.isdir(os.path.expanduser(path))
+
+    @Slot(str)
+    def setProjectDir(self, path):
+        """Var olan bir projeyi odaya aç: bu sohbetin ve sonraki yeni sohbetlerin klasörü olur. Ajanların oturumları
+        yeni klasörde baştan açılır (eski klasörde okuduklarını burada sanmasınlar); odaya görünür bir satır düşer."""
+        path = os.path.normpath(os.path.expanduser(path or ""))
+        if not os.path.isdir(path):
+            self.statusText.emit("Klasör bulunamadı: " + path)
+            return
+        if self._running:
+            self.statusText.emit("Ajanlar çalışırken klasör değişmez; önce durdurun")
+            return
+        old = self.chatDir
+        recent = [path] + [d for d in self._s.get("recentDirs") or [] if d != path]
+        self._s["recentDirs"] = recent[:8]
+        self._s["workDir"] = path
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CONFIG_FILE.write_text(json.dumps(self._s, indent=2, ensure_ascii=False))
+        if os.path.normpath(old) != path:
+            self._chat["workDir"] = path
+            self._chat["sessions"] = {}
+            self._snap = None
+            if self._chat["messages"]:
+                self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR,
+                                 f"📁 {self._s['userName']} proje klasörünü değiştirdi: `{path}`. Ajanlar bu klasörde çalışır.",
+                                 True, 0, emit=True)
+                self._save_chat()
+        self.settingsChanged.emit()
+        self.chatsChanged.emit()
+        self.filesChanged.emit()
+        self.statusText.emit("Proje klasörü: " + path)
 
     @Property("QVariant", notify=settingsChanged)
     def settings(self):
@@ -776,6 +955,7 @@ class Room(QObject):
             names.add(name.lower())
         clean["panelOpen"] = bool(clean.get("panelOpen", True))
         clean["roleTemplates"] = self._s.get("roleTemplates") or []      # şablonlar yalnız kendi düğmeleriyle değişir
+        clean["recentDirs"] = self._s.get("recentDirs") or []
         clean["autoRounds"] = int(clean["autoRounds"])
         clean["maxChars"] = int(clean["maxChars"])
         clean["maxCalls"] = max(0, int(clean.get("maxCalls") or 0))
@@ -1068,6 +1248,8 @@ class Room(QObject):
             return
         first = not self._chat.get("title")
         self._post_pact("talk")
+        if self._s.get("production"):
+            self._post_pact("prod")      # Üretim açıkken anlaşmaya eklenen kural süren sohbete de bir kez düşer
         mid = uuid.uuid4().hex
         self._append_msg(mid, "user", self._s["userName"], USER_COLOR, text, True, 0, emit=True)
         media = list(getattr(self, "_attached", []) or [])
@@ -1256,14 +1438,23 @@ class Room(QObject):
         return [a["key"] for a in self._enabled() if said(a["key"]) or said(a["name"])]
 
     def _post_pact(self, kind):
-        """Oda anlaşmasını sohbette bir kez göster: Tartışma'da ilk mesajla, Üretim ilk açılınca."""
+        """Oda anlaşmasını sohbette bir kez göster: Tartışma'da ilk mesajla, Üretim ilk açılınca.
+        Anlaşmaya sonradan eklenen kural (PACT_VER) Üretim'i çoktan açılmış sohbete yalnız bir kez yazılır."""
         done = self._chat.setdefault("pact", [])
-        if not self._s.get("pact", True) or kind in done:
+        if not self._s.get("pact", True):
             return
+        if kind in done:
+            if kind == "prod" and int(self._chat.get("pactVer", 1)) < PACT_VER:
+                self._chat["pactVer"] = PACT_VER
+                self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR,
+                                 "🤝 Oda anlaşmasına eklendi: " + PACT_HELP, True, 0, emit=True)
+            return
+        if kind == "prod":
+            self._chat["pactVer"] = PACT_VER
         if kind == "prod" and "talk" not in done:
-            text, done[:] = PACT_TALK + " " + PACT_PROD, ["talk", "prod"]
+            text, done[:] = PACT_TALK + " " + PACT_PROD + " " + PACT_HELP, ["talk", "prod"]
         else:
-            text = PACT_TALK if kind == "talk" else PACT_PROD
+            text = PACT_TALK if kind == "talk" else PACT_PROD + " " + PACT_HELP
             done.append(kind)
         self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, "🤝 Oda anlaşması: " + text, True, 0, emit=True)
 
@@ -1732,7 +1923,8 @@ class Room(QObject):
             self._chat["messages"][-1]["media"] = media
             self.messageMedia.emit(mid, "\n".join(media))
             for f in media:
-                if not f.startswith(str(MEDIA_DIR)) and f in cur.get("files", []):
+                # ajanın gösterdiği dosya: araçla ya da komutla üretmiş olabilir (ses, video çoğu zaman komutla)
+                if not f.startswith((str(MEDIA_DIR), str(ATTACH_DIR))) and f not in (self._chat.get("files") or {}):
                     self._note_file(f, cur["agent"]["name"], "yeni")
         cur["files"] = []
 
@@ -2111,8 +2303,9 @@ class Room(QObject):
         return out
 
     def _snap_start(self):
-        """Üretimde ilk ajan başlarken projenin fotoğrafını çek (karşılaştırma noktası)."""
-        if self._s.get("production") and getattr(self, "_snap", None) is None:
+        """İlk ajan başlarken projenin fotoğrafını çek (karşılaştırma noktası). Tartışma'da da: ajanlar taslak/
+        klasörüne resim, ses, video üretir; panel onları da göstersin (19.11.2026)."""
+        if getattr(self, "_snap", None) is None:
             self._snap = self._scan()
             self._snap_wd = self._workdir()
 
@@ -2509,8 +2702,7 @@ class Room(QObject):
         if cur["fmt"] == "agy" and (ok or silent):
             QTimer.singleShot(1000, lambda a=a: self._read_quota(a))       # agy tur içinde kota bildirmez
         self.messageDone.emit(cur["id"], ok or silent or bool(restart), dt)
-        if cur.get("prod"):
-            self._report_changes(cur)
+        self._report_changes(cur)
         if not self._running:
             self._snap = None     # oda boşaldı: senin aradaki değişikliklerin bir ajana yazılmasın
         self._save_chat()

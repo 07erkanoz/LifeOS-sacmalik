@@ -72,9 +72,9 @@ Item {
         } else if (l.charAt(0) === "/") openLink("file://" + l)
         else Qt.openUrlExternally(l)
     }
-    // mesajlar ekran ne kadar geniş olursa olsun ortada, okunur genişlikte bir sütunda durur
+    // mesaj sütunu pencereyle birlikte iki yana açılır; çok geniş ekranda okunur kalsın diye üst sınırı var (Theme.column)
     readonly property real side: Math.max(20, (width - Theme.column) / 2)
-    readonly property real maxW: Math.min(isUser ? 620 : 720, (width - 2 * side - 48) * (isUser ? 0.8 : 0.92))
+    readonly property real maxW: (width - 2 * side - 48) * (isUser ? 0.78 : 0.94)
     implicitHeight: isSystem ? sysPill.height + 14 : row.implicitHeight + (showHeader ? 12 : 0)
 
     // oda bilgisi (mod değişikliği, anlaşma, dosya değişikliği): ortada küçük bir hap

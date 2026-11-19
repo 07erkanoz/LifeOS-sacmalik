@@ -29,7 +29,7 @@ QtObject {
     readonly property real glow:      dark ? 0.07 : 0.10
     // ölçüler
     readonly property int radius: 14
-    readonly property int column: 880        // mesaj sütununun en geniş hâli
+    property int column: 880                 // mesaj sütunu: Main.qml pencere genişliğine bağlar (iki yana açılır)
     readonly property string mono: "JetBrains Mono, Fira Code, monospace"
 
     Behavior on dark { enabled: false }

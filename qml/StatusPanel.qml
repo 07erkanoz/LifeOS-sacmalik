@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Shapes
+import QtMultimedia
 
 // Sağdaki durum paneli: odadaki ajanlar (ne yaptıkları, ne kadar sürdüğü, durdurma) ve bu sohbette üretilen
 // dosyalar (görseller, kod, belgeler). Ajan listesi ayarlardaki ajanlardan gelir: ajan eklenince panel de değişir.
@@ -14,7 +15,7 @@ Rectangle {
     readonly property var st: room.agentStatus
     readonly property var files: room.producedFiles
     readonly property int runningCount: agents.filter(function(a) { return (st[a.key] || {}).state === "running" }).length
-    property int tab: 0                     // 0 görseller · 1 kod · 2 belgeler
+    property int tab: 0                     // 0 görseller · 1 ses · 2 kod · 3 belgeler
     property real now: Date.now() / 1000
     Timer { interval: 1000; repeat: true; running: pn.runningCount > 0; onTriggered: pn.now = Date.now() / 1000 }
 
@@ -26,6 +27,7 @@ Rectangle {
     function mins(s) { return s >= 60 ? Math.floor(s / 60) + " dk" : s + " sn" }
     function ofKind(k) { return pn.files.filter(function(f) { return f.kind === k }) }
     readonly property var images: ofKind("image")
+    readonly property var audios: ofKind("audio")
     readonly property var codes: ofKind("code")
     readonly property var docs: ofKind("doc")
 
@@ -124,7 +126,7 @@ Rectangle {
             implicitHeight: 32; radius: 10
             color: Theme.dark ? "#0d0f15" : "#eceef4"
             border.color: Theme.lineSoft
-            readonly property real cw: (width - 6) / 3
+            readonly property real cw: (width - 6) / 4
             Rectangle {
                 x: 3 + pn.tab * seg.cw; y: 3; width: seg.cw; height: parent.height - 6; radius: 8
                 color: Theme.dark ? "#232733" : "#ffffff"
@@ -134,7 +136,7 @@ Rectangle {
             Row {
                 x: 3; y: 3
                 Repeater {
-                    model: [["Görseller", pn.images.length], ["Kod", pn.codes.length], ["Belgeler", pn.docs.length]]
+                    model: [["Görsel", pn.images.length], ["Ses", pn.audios.length], ["Kod", pn.codes.length], ["Belge", pn.docs.length]]
                     Item {
                         width: seg.cw; height: seg.height - 6
                         Row {
@@ -174,14 +176,19 @@ Rectangle {
                         layer.enabled: true
                         Image {
                             anchors.fill: parent
-                            visible: !parent.parent.vid
-                            source: parent.parent.vid ? "" : "file://" + modelData.path
+                            visible: !parent.parent.vid || !!modelData.thumb
+                            source: parent.parent.vid ? (modelData.thumb ? "file://" + modelData.thumb : "") : "file://" + modelData.path
                             sourceSize: Qt.size(220, 220)
                             fillMode: Image.PreserveAspectCrop; asynchronous: true; smooth: true; cache: false
                             scale: tm.containsMouse ? 1.06 : 1
                             Behavior on scale { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
                         }
-                        Text { anchors.centerIn: parent; visible: parent.parent.vid; text: "▶"; color: Theme.textDim; font.pixelSize: Theme.fs(20) }
+                        Rectangle {   // video: kare üstünde oynat işareti
+                            visible: parent.parent.vid
+                            anchors.centerIn: parent; width: 30; height: 30; radius: 15
+                            color: Qt.rgba(0, 0, 0, 0.55); border.color: Qt.rgba(1, 1, 1, 0.35)
+                            Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 1; text: "▶"; color: "white"; font.pixelSize: Theme.fs(12) }
+                        }
                         Rectangle {   // altta ad: üstüne gelince
                             anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
                             height: 30; opacity: tm.containsMouse ? 1 : 0
@@ -212,9 +219,9 @@ Rectangle {
             ListView {
                 id: rows
                 anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
-                visible: pn.tab !== 0
+                visible: pn.tab >= 2
                 clip: true; spacing: 1
-                model: pn.tab === 1 ? pn.codes : pn.docs
+                model: pn.tab === 2 ? pn.codes : pn.docs
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 delegate: Rectangle {
@@ -251,7 +258,75 @@ Rectangle {
                     ToolTip.visible: rm.containsMouse; ToolTip.delay: 600
                     ToolTip.text: modelData.path + "\n" + (modelData.who || "?") + " · " + modelData.change + "\nTıkla: aç"
                 }
-                Empty { visible: rows.count === 0; text: pn.tab === 1 ? "Henüz kod yok" : "Henüz belge yok" }
+                Empty { visible: rows.count === 0; text: pn.tab === 2 ? "Henüz kod yok" : "Henüz belge yok" }
+            }
+
+            // ses: panelin içinde dinlenir; çift tıklayınca dışarıda açılır
+            MediaPlayer {
+                id: player
+                property string current: ""
+                audioOutput: AudioOutput { }
+                onPlaybackStateChanged: if (playbackState === MediaPlayer.StoppedState) current = ""
+            }
+            ListView {
+                id: sounds
+                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10
+                visible: pn.tab === 1
+                clip: true; spacing: 1
+                model: pn.audios
+                boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                delegate: Rectangle {
+                    readonly property bool playing: player.current === modelData.path && player.playbackState === MediaPlayer.PlayingState
+                    width: sounds.width; height: 52; radius: 10
+                    color: playing ? Qt.rgba(Qt.color(modelData.color).r, Qt.color(modelData.color).g, Qt.color(modelData.color).b, 0.12)
+                         : sm.containsMouse ? Theme.cardHi : "transparent"
+                    Behavior on color { ColorAnimation { duration: 140 } }
+                    RowLayout {
+                        anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 10
+                        spacing: 10
+                        Rectangle {
+                            width: 32; height: 32; radius: 16
+                            color: parent.parent.playing ? modelData.color : Qt.rgba(Qt.color(modelData.color).r, Qt.color(modelData.color).g, Qt.color(modelData.color).b, 0.18)
+                            Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: parent.parent.parent.playing ? 0 : 1
+                                   text: parent.parent.parent.playing ? "❚❚" : "▶"; color: parent.parent.parent.playing ? "white" : modelData.color
+                                   font.pixelSize: Theme.fs(parent.parent.parent.playing ? 9 : 11); font.bold: true }
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true; spacing: 2
+                            Text { Layout.fillWidth: true; text: modelData.name; color: Theme.text; font.pixelSize: Theme.fs(12.5)
+                                   font.weight: Font.Medium; elide: Text.ElideMiddle }
+                            // çalarken ilerleme, değilse klasör ve boyut
+                            Item {
+                                Layout.fillWidth: true; implicitHeight: 13
+                                Rectangle {
+                                    visible: parent.parent.parent.parent.playing
+                                    anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 3; radius: 1.5; color: Theme.line
+                                    Rectangle { height: parent.height; radius: 1.5; color: modelData.color
+                                                width: player.duration > 0 ? parent.width * player.position / player.duration : 0 }
+                                }
+                                Text {
+                                    visible: !parent.parent.parent.parent.playing
+                                    width: parent.width; elide: Text.ElideMiddle; color: Theme.muted; font.pixelSize: Theme.fs(10.5)
+                                    text: (modelData.dir || "proje kökü") + " · " + Math.max(1, Math.round(modelData.size / 1024)) + " KB"
+                                }
+                            }
+                        }
+                        Rectangle { width: 7; height: 7; radius: 3.5; color: modelData.color }
+                    }
+                    MouseArea {
+                        id: sm; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (parent.playing) { player.pause(); return }
+                            if (player.current !== modelData.path) { player.source = "file://" + modelData.path; player.current = modelData.path }
+                            player.play()
+                        }
+                        onDoubleClicked: Qt.openUrlExternally("file://" + modelData.path)
+                    }
+                    ToolTip.visible: sm.containsMouse; ToolTip.delay: 600
+                    ToolTip.text: modelData.path + "\n" + (modelData.who || "?") + " · " + modelData.change + "\nTıkla: dinle · çift tıkla: dışarıda aç"
+                }
+                Empty { visible: sounds.count === 0; text: "Henüz ses yok" }
             }
         }
     }
