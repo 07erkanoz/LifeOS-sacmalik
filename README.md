@@ -32,7 +32,7 @@ hangi modda olduklarını ve ekranın neler gösterebildiğini bilir.
 - **Medya:** ajanların ürettiği resim, video, SVG, PDF ve HTML sohbette önizlenir; bağlantılar ve dosya yolları
   tıklanabilir.
 - **@ ile söz ver:** `@claude`, `@codex`, `@agy` yazınca yalnızca anılan ajanlar o turu alır.
-- **Kota:** her ajanın 5 saatlik ve haftalık kota doluluğu kartında görünür; CLI'ın kendi raporundan, model
+- **Kota:** her ajanın 5 saatlik ve haftalık kalan kotası kartında görünür; CLI'ın kendi raporundan, model
   çağırmadan okunur. Bir ajanın kotası dolunca odaya yazılır, diğerleri de görür.
 - **Güvenlik ağları:** mesaj başına çağrı sınırı, takılan Antigravity komutları için zaman aşımı ve uyandırma,
   her şeyin olay kaydı (`~/.local/share/sacmalik/loglar/`).

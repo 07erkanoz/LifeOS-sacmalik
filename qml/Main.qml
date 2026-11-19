@@ -32,8 +32,9 @@ ApplicationWindow {
         var order = [["5h", "5s"], ["week", "hafta"]]   // alt pencereler (week:Fable gibi) yalnızca ipucunda
         for (var o = 0; o < order.length; o++)
             for (var i = 0; i < q.length; i++)
-                if (q[i].name === order[o][0]) ws.push(order[o][1] + " %" + q[i].used)
-        return ws.join(" · ")
+                if (q[i].name === order[o][0]) ws.push(order[o][1] + " %" + Math.max(0, 100 - q[i].used))
+        // Codex ve Antigravity kendi ekranlarında kalanı yazar: burada da kalan gösterilir
+        return ws.length ? ws.join(" · ") + " kaldı" : ""
     }
     function quotaTip(key) {
         var q = room.quota[key] || [], out = []
@@ -42,7 +43,8 @@ ApplicationWindow {
             var n = (parts[0] === "5h" ? "5 saatlik" : parts[0] === "week" ? "Haftalık" : parts[0])
                     + (parts.length > 1 ? " (" + parts[1] + ")" : "")
             var r = q[i].resets ? new Date(q[i].resets * 1000) : null
-            out.push(n + ": %" + q[i].used + " dolu" + (r ? " · " + Qt.formatDateTime(r, "dd.MM HH:mm") + " sıfırlanır" : ""))
+            out.push(n + ": %" + Math.max(0, 100 - q[i].used) + " kaldı (%" + q[i].used + " kullanıldı)"
+                     + (r ? " · " + Qt.formatDateTime(r, "dd.MM HH:mm") + " yenilenir" : ""))
         }
         return out.join("\n")
     }

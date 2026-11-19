@@ -61,9 +61,9 @@ Rectangle {
             Text { text: p.sub; color: p.active ? p.tint : Theme.muted; font.pixelSize: Theme.fs(11); elide: Text.ElideRight; Layout.fillWidth: true }
             Text {
                 visible: p.usageLine !== ""
-                text: (p.usageFull ? "⛔ kota doldu · " : "") + p.usageLine
+                text: p.usageFull ? "⛔ kota doldu" : p.usageLine
                 color: p.usageFull ? Theme.danger : Theme.muted
-                font.pixelSize: Theme.fs(10); font.family: Theme.mono
+                font.pixelSize: Theme.fs(11)
                 elide: Text.ElideRight; Layout.fillWidth: true
             }
         }

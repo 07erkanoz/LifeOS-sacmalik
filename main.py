@@ -1603,7 +1603,8 @@ class Room(QObject):
                 except ValueError:
                     r = None
                 out.append({"name": win + (f":{tag}" if tag else ""), "resets": r,
-                            "used": max(0, min(100, round((1 - float(b["remaining_fraction"])) * 100)))})
+                            # Antigravity kalanı aşağı yuvarlar (0,9658 → %96): aynısı görünsün
+                            "used": max(0, min(100, 100 - int(float(b["remaining_fraction"]) * 100)))})
         return out
 
     @staticmethod
