@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import uuid
 from pathlib import Path
 
@@ -67,14 +68,25 @@ ACK_RE = re.compile(r"\bbekl[ei]|\btamam(dır)?\b|\banlaşıldı|\banladım|👍
 ACK_NOT = re.compile(r"`|\]\(|https?://|\w\.(js|py|html|css|md|png|svg)\b|üstlen|tamamlandı|bitti|hazır\b|kaydedildi", re.I)
 
 
+# itiraz ya da uyarı: kısa da olsa hemen ulaşmalı ("Tamam, koordinatlar ters", "Bekle, bu yanlış")
+ACK_OBJ = re.compile(r"\b(ama|fakat|ancak|lakin|yanlış|ters|hata|hatalı|sorun|değil|olmadı|olmuyor|çalışmıyor|"
+                     r"bozuk|eksik|boş|dur|durun|bekle|bekleyin|dikkat|uyarı)\b", re.I)
+# "Tamam, ..." ile başlayıp ardından söz söyleyen mesaj onay değildir
+ACK_HEAD = re.compile(r"^\W*(tamam(dır)?|anlaşıldı|anladım|👍)[\s,.:;!—–-]+(.*)$", re.I | re.S)
+
+
 def is_ack(text):
     t = (text or "").strip()
-    if len(t) > 160 or "?" in t or ACK_NOT.search(t):
-        return False      # soru, dosya, bağlantı, üstlenme ya da bitti haberi taşıyan mesaj bilgi sayılır
+    if len(t) > 160 or "?" in t or ACK_NOT.search(t) or ACK_OBJ.search(t):
+        return False      # soru, itiraz, dosya, bağlantı, üstlenme ya da bitti haberi taşıyan mesaj bilgi sayılır
+    m = ACK_HEAD.match(t)
+    if m and len(m.group(3).split()) >= 3:
+        return False
     return bool(ACK_RE.search(t))
 
 
 LIMIT_ERROR = re.compile(r"rate.?limit|usage limit|quota|limit reached|hit your limit|resource.?exhausted|\b429\b|kota", re.I)
+CLASH_SECS = 600    # aynı dosyaya bu süre içinde ikinci bir ajan yazarsa odaya uyarı düşer
 HEADER_VER = 6      # oda bilgisi değişince sürmekte olan oturumlara da bir kez gönderilir
 # sohbette gösterilecek ajan çıktıları: resimler önizlenir, diğerleri tıklayınca açılır
 MEDIA_EXT = ("png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "avif",
@@ -157,6 +169,8 @@ DEFAULTS = {
     "parallel": True,       # yeni mesajda üç ajan aynı anda çağrılır; konuşulanlar çalışanlara canlı iletilir
     "production": False,     # False = tartışma: CLI'lar salt-okunur çalışır (dosya yazamaz, komut çalıştıramaz)
     "maxChars": 60000, "maxCalls": 12, "cmdTimeout": 180, "pact": True, "liveRelay": True,
+    "leanTools": True,      # ajanlar kişisel bağlayıcı/MCP sunucuları olmadan açılır (gizlilik, daha az araç tanımı)
+   
     "theme": "dark",
     "fontScale": 1.0,       # yazı boyutu çarpanı (0.8–1.6)        # "dark" ya da "light"; üst çubuktaki düğmeyle değişir, hatırlanır
     "keepSessions": True,
@@ -216,6 +230,7 @@ class Room(QObject):
     messageDone = Signal(str, bool, float)                  # id, ok, seconds
     messageSilent = Signal(str)                             # id: ajan konuşmamayı seçti
     messageMedia = Signal(str, str)                         # id, dosya yolları (satır satır)
+    messagePinned = Signal(str, bool)                       # id, sabit mi: yeni oturumda dökümden düşmez
     quotaChanged = Signal()                                 # ajanların 5 saatlik ve haftalık kota doluluğu
     roomReset = Signal()
     busyChanged = Signal()
@@ -314,7 +329,7 @@ class Room(QObject):
         clean["maxCalls"] = max(0, int(clean.get("maxCalls") or 0))
         clean["cmdTimeout"] = max(0, int(clean.get("cmdTimeout") or 0))
         clean["fontScale"] = min(1.6, max(0.8, round(float(clean.get("fontScale") or 1.0), 2)))
-        for k in ("keepSessions", "autoMode", "parallel", "production", "liveRelay"):
+        for k in ("keepSessions", "autoMode", "parallel", "production", "liveRelay", "leanTools"):
             clean[k] = bool(clean[k])
         for a in clean["agents"]:
             a["timeout"] = max(0, int(a.get("timeout") or 0))   # 0 = sınırsız
@@ -414,8 +429,10 @@ class Room(QObject):
                 c["seen"].setdefault(k, v["seen"])
         self._chat = c
         self.roomReset.emit()
+        ids = [m.get("id") for m in c["messages"]]
         for m in c["messages"]:
-            mid = uuid.uuid4().hex
+            # kayıtlı kimlik tekse onu kullan: sabitleme gibi işlemler mesajı bununla bulur
+            mid = m["id"] if m.get("id") and ids.count(m["id"]) == 1 else uuid.uuid4().hex
             shown = m["text"] + (f"\n\n_⚠ {m['note']}_" if m.get("note") else "")
             self.messageAdded.emit(mid, m["key"], m["name"], m["color"], shown, False, m.get("time", ""))
             if m.get("acts"):
@@ -423,8 +440,24 @@ class Room(QObject):
             if m.get("media"):
                 self.messageMedia.emit(mid, "\n".join(f for f in m["media"] if os.path.isfile(f)))
             self.messageDone.emit(mid, m.get("ok", True), m.get("secs", 0))
+            if m.get("pinned"):
+                self.messagePinned.emit(mid, True)
         self.chatsChanged.emit()
         self.statusText.emit(f"Sohbet açıldı · {c.get('workDir') or self._s['workDir']}")
+
+    @Slot(str)
+    def togglePin(self, mid):
+        """Mesajı sabitle ya da bırak. Sabit mesaj, ajana yeni oturum açılırken döküm kırpılsa da gider."""
+        m = next((m for m in reversed(self._chat["messages"]) if m.get("id") == mid), None)
+        if not m:
+            return
+        if m.get("pinned"):
+            m.pop("pinned")
+        else:
+            m["pinned"] = True
+        self._log("pin", id=mid, pinned=bool(m.get("pinned")))
+        self._save_chat()
+        self.messagePinned.emit(mid, bool(m.get("pinned")))
 
     @Slot(str)
     @Slot(str, str)
@@ -821,7 +854,27 @@ class Room(QObject):
         mx = int(self._s["maxChars"])
         if len(body) > mx:
             body = body[-mx:]
+        # sabitlenen mesajlar kırpmada düşmesin: dökümde kalmadıysa başa, olduğu gibi eklenir
+        lost = [m for m in tr if m.get("pinned") and self._fmt([m]) not in body]
+        if lost:
+            body = (f"Sabitlenen mesajlar ({self._s['userName']} sabitledi; döküm uzun olduğu için "
+                    f"aşağıda yer almıyor olabilirler):\n\n" + self._fmt(lost) + "\n\n---\n\n" + body)
         return self._header(agent) + "\n\n" + body
+
+    def _codex_lean(self):
+        """Yalın oda profili (Codex): ~/.codex/config.toml'daki MCP sunucuları kapatılır; tarayıcı/REPL
+        sunucuları kalır, çünkü Codex sayfayı açıp kontrol etmek için onları kullanıyor."""
+        if not self._s.get("leanTools", True):
+            return []
+        try:
+            cfg = tomllib.loads((Path.home() / ".codex" / "config.toml").read_text())
+        except (OSError, ValueError):
+            return []
+        out = []
+        for name in cfg.get("mcp_servers") or {}:
+            if re.fullmatch(r"[A-Za-z0-9_-]+", name) and not re.search(r"repl|browser|chrome", name, re.I):
+                out += ["-c", f"mcp_servers.{name}.enabled=false"]
+        return out
 
     def _build_cmd(self, agent, prompt, sid, plain=False):
         """Komutu kur: model/effort + (varsa) oturum sürdürme + canlı olay akışı."""
@@ -890,6 +943,11 @@ class Room(QObject):
                     extra.append("--sandbox")
                 extra += ["--settings", json.dumps({"permissions": {"allow": rules or ["command(*)"]}})]
         if exe == "claude":
+            if self._s.get("leanTools", True) and "--strict-mcp-config" not in args:
+                # yalın oda profili: kişisel bağlayıcılar (Gmail, Takvim, Drive…), MCP sunucuları ve kullanıcı
+                # eklentileri yüklenmez; yerleşik araçlar (Bash, Read, Write, Edit, WebSearch) aynen kalır.
+                # İzinler komut satırından verildiği için kullanıcı ayarlarını atlamak onları etkilemez.
+                extra += ["--strict-mcp-config", "--setting-sources", "project,local"]
             if not plain and not has_fmt:
                 # çift yönlü akış: çalışırken odaya düşen mesajlar Claude'a anında yazılır
                 extra += ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
@@ -1045,7 +1103,7 @@ class Room(QObject):
                "agy" if exe in ("agy", "antigravity") and "stream-json" in args else "text")
         if fmt == "codex" and args[1:2] == ["exec"]:
             # codex app-server: tur sürerken gelen mesajlar turn/steer ile aynı tura eklenir
-            fmt, args, stdin = "cxs", [args[0], "app-server"], None
+            fmt, args, stdin = "cxs", [args[0], "app-server"] + self._codex_lean(), None
         args = pre + args
 
         self._chat.setdefault("hdr", {})[key] = HEADER_VER
@@ -1531,6 +1589,7 @@ class Room(QObject):
         old = getattr(self, "_snap", None)
         if old is None or self._snap_wd != self._workdir():
             self._snap = None
+            self._writers = {}
             return
         new = self._scan()
         self._snap = new
@@ -1543,10 +1602,13 @@ class Room(QObject):
             return
         wd = self._workdir()
         # kim yazdı: ajanların dosya araçlarından bildiğimiz yollar (komutla yazılanlar bilinmez)
-        owners = {}
+        writers = {}      # yol -> o aralıkta dosya aracıyla yazan ajanlar (sırayla)
         for c in [cur] + [c for c in self._running.values() if c is not cur]:
             for p in c.get("wrote", ()):
-                owners.setdefault(os.path.relpath(p, wd), c["agent"]["name"])
+                ns = writers.setdefault(os.path.relpath(p, wd), [])
+                if c["agent"]["name"] not in ns:
+                    ns.append(c["agent"]["name"])
+        owners = {p: ns[0] for p, ns in writers.items()}
         cur["wrote"] = set()
         others = [c["agent"]["name"] for c in self._running.values() if c is not cur]
         everything = set(added) | set(changed) | set(removed)
@@ -1567,8 +1629,23 @@ class Room(QObject):
         for label, ps in (("yeni", added), ("değişti", changed), ("silindi", removed)):
             if ps:
                 parts.append(f"{label}: {fmt(ps)}")
-        self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR,
-                         "📝 Projede " + "; ".join(parts), True, 0, emit=True)
+        text = "📝 Projede " + "; ".join(parts)
+
+        # aynı dosyaya kısa aralıkla birden fazla ajan yazdıysa görünür olsun (engellemez, yalnızca bildirir)
+        now, hist, clash = time.time(), self.__dict__.setdefault("_writers", {}), []
+        for p in sorted(everything):
+            names = writers.get(p) or ([who(p)] if who(p) != "?" else [])
+            if not names:
+                continue
+            prev = hist.get(p)
+            seq = ([prev[0]] if prev and now - prev[1] <= CLASH_SECS and prev[0] not in names else []) + names
+            if len(seq) > 1:
+                clash.append(f"`{p}` ({', '.join(seq)})")
+            hist[p] = (names[-1], now)
+        if clash:
+            text += ("\n⚠ Aynı dosyaya kısa aralıkla birden fazla ajan yazdı: " + ", ".join(clash[:6])
+                     + (f" ve {len(clash) - 6} dosya daha" if len(clash) > 6 else ""))
+        self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, text, True, 0, emit=True)
 
     # ================= kota =================
     MAIN_WINDOWS = ("5h", "week")     # aboneliğin asıl pencereleri; "week:Fable" gibi alt pencereler ipucunda

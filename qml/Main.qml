@@ -181,13 +181,17 @@ ApplicationWindow {
         target: room
         function onMessageAdded(id, key, name, color, text, pending, time) {
             var item = { mid: id, key: key, name: name, color: color, body: text,
-                         pending: pending, ok: true, secs: 0, silent: false, acts: "", media: "",
+                         pending: pending, ok: true, secs: 0, silent: false, acts: "", media: "", pinned: false,
                          time: time || Qt.formatTime(new Date(), "HH:mm") }
             if (pending) msgs.append(item)
             else msgs.insert(firstPending(), item)
             Qt.callLater(chat.positionViewAtEnd)
         }
         function onRoomReset() { msgs.clear() }
+        function onMessagePinned(id, on) {
+            var i = indexOfId(id); if (i < 0) return
+            msgs.setProperty(i, "pinned", on)
+        }
         function onMessageActivity(id, text) {
             var i = indexOfId(id); if (i < 0) return
             msgs.setProperty(i, "acts", text)

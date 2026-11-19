@@ -222,6 +222,27 @@ Item {
                     NumberAnimation { to: 0; duration: 900; easing.type: Easing.InOutSine }
                 }
                 HoverHandler { id: bh }
+                // sabitle: ajanlara yeni oturumda da hep giden mesaj
+                Rectangle {
+                    id: pinBtn
+                    z: 2
+                    visible: !model.pending && !bubble.typing && (model.pinned || bh.hovered || pinMa.containsMouse)
+                    width: 24; height: 24; radius: 12
+                    y: -8
+                    x: isUser ? -10 : bubble.width - 14
+                    color: Theme.card
+                    border.color: model.pinned ? root.c : Theme.lineSoft
+                    Text { anchors.centerIn: parent; text: "📌"; font.pixelSize: Theme.fs(11); opacity: model.pinned ? 1 : 0.5 }
+                    MouseArea {
+                        id: pinMa
+                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: room.togglePin(model.mid)
+                    }
+                    ToolTip.visible: pinMa.containsMouse
+                    ToolTip.delay: 400
+                    ToolTip.text: model.pinned ? "Sabitlemeyi kaldır"
+                                               : "Sabitle: ajanlara yeni oturum açılırken döküm kırpılsa da bu mesaj gider"
+                }
                 Behavior on implicitHeight { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
                 Behavior on implicitWidth { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
                 Gradient {

@@ -143,6 +143,19 @@ Drawer {
                             Layout.fillWidth: true
                             spacing: 10
                             Switch {
+                                checked: d.draft.leanTools !== false
+                                onToggled: { var nd = Object.assign({}, d.draft); nd.leanTools = checked; d.draft = nd }
+                            }
+                            Text {
+                                Layout.fillWidth: true; wrapMode: Text.WordWrap
+                                color: Theme.textDim; font.pixelSize: Theme.fs(12)
+                                text: "Yalın araç profili: Claude ve Codex senin kişisel bağlayıcıların (Gmail, Takvim, Drive…) ve MCP sunucuların olmadan açılır. Dosya, komut, web araması ve Codex'in tarayıcısı kalır. Kapatınca kendi kurulumunla açılırlar."
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            Switch {
                                 checked: d.draft.parallel !== false
                                 onToggled: { var nd = Object.assign({}, d.draft); nd.parallel = checked; d.draft = nd }
                             }
