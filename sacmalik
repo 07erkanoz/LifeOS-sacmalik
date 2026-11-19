@@ -1,0 +1,5 @@
+#!/bin/sh
+# Saçmalık Odası. Kurulu sistemde /usr/lib/sacmalik; geliştirmede SACMALIK_ROOT ya da bu betiğin klasörü.
+ROOT="${SACMALIK_ROOT:-/usr/lib/sacmalik}"
+[ -f "$ROOT/main.py" ] || ROOT="$(dirname "$(readlink -f "$0")")"
+exec python3 "$ROOT/main.py" "$@"

@@ -1,0 +1,13 @@
+# kişisel veriler: sohbetler, kayıtlar ve ajanların çalıştığı klasör depoya girmez
+sohbetler/
+loglar/
+medya/
+kayitlar/
+oda/
+taslak/
+__pycache__/
+*.pyc
+
+# iç notlar ve eski başlatıcı
+DUSUNCE_ODASI_RAPORU.md
+calistir.sh

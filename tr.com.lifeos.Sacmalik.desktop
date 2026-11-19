@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Saçmalık Odası
+Name[tr]=Saçmalık Odası
+Comment=You, Claude, Codex and Antigravity in one chat room
+Comment[tr]=Sen, Claude, Codex ve Antigravity aynı sohbet odasında
+Exec=sacmalik
+Icon=tr.com.lifeos.Sacmalik
+Categories=Development;
+Keywords=AI;Claude;Codex;Gemini;Antigravity;chat;
+StartupWMClass=tr.com.lifeos.Sacmalik

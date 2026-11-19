@@ -1,0 +1,7 @@
+singleton Theme 1.0 Theme.qml
+Participant 1.0 Participant.qml
+GhostButton 1.0 GhostButton.qml
+MessageBubble 1.0 MessageBubble.qml
+SettingsDrawer 1.0 SettingsDrawer.qml
+Field 1.0 Field.qml
+Picker 1.0 Picker.qml
