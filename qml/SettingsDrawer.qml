@@ -116,7 +116,7 @@ Drawer {
                             Field { Layout.fillWidth: true; text: String(d.draft.maxChars || 60000)
                                     validator: IntValidator { bottom: 1000 }
                                     onTextEdited: d.draft.maxChars = parseInt(text) || 60000 }
-                            Text { text: "Mesajın başına en fazla model çağrısı (0 = sınırsız)"; color: Theme.textDim; font.pixelSize: Theme.fs(12); wrapMode: Text.WordWrap; Layout.preferredWidth: 190 }
+                            Text { text: "Mesajın başına en fazla model çağrısı (0 = sınırsız; Oto açıkken uygulanmaz)"; color: Theme.textDim; font.pixelSize: Theme.fs(12); wrapMode: Text.WordWrap; Layout.preferredWidth: 190 }
                             Field { Layout.fillWidth: true; text: String(d.draft.maxCalls === undefined ? 12 : d.draft.maxCalls)
                                     validator: IntValidator { bottom: 0 }
                                     onTextEdited: d.draft.maxCalls = parseInt(text) || 0 }

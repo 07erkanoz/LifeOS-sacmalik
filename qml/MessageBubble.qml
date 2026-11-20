@@ -54,7 +54,11 @@ Item {
         return parts.join("")
     }
     // kullanıcı balonu: eklerin yolları ajanlar içindir, ekranda kart olarak görünürler
-    readonly property string shownBody: isUser ? model.body.replace(/\n*\*\*Ekler:\*\*\n(?:- `[^`\n]+`\n?)+$/, "") : model.body
+    // karar turunda saklı cevap: hepsi bitince birlikte açılır (ajanlar da birbirininkini o zaman görür)
+    readonly property string shownBody: model.sealed
+        ? (model.pending ? "🔒 *Kendi cevabını yazıyor; ötekilerin cevabını görmüyor.*"
+                         : "🔒 *Cevabını yazdı. Cevaplar hepsi bitince birlikte açılacak.*")
+        : isUser ? model.body.replace(/\n*\*\*Ekler:\*\*\n(?:- `[^`\n]+`\n?)+$/, "") : model.body
     function html(md) {
         var h = room.renderMd(root.linkify(md), Theme.dark, Theme.scale)
         if (!isUser) return h
@@ -159,6 +163,16 @@ Item {
                                 onClicked: win.insertMention(model.name) }
                     ToolTip.visible: nameMa.containsMouse; ToolTip.delay: 500; ToolTip.text: "@" + model.name.toLowerCase() + " olarak yazı kutusuna ekle"
                 }
+                // yalnız anılan ajana giden mesaj: diğer ajanlar görmez (sen görürsün)
+                Rectangle {
+                    visible: !!model.to
+                    implicitWidth: toTxt.implicitWidth + 16; implicitHeight: 20; radius: 10
+                    color: Qt.rgba(root.c.r, root.c.g, root.c.b, 0.14); border.color: Qt.rgba(root.c.r, root.c.g, root.c.b, 0.4)
+                    Text { id: toTxt; anchors.centerIn: parent; text: "→ " + (model.to || "") + " · özel"; color: Theme.textDim; font.pixelSize: Theme.fs(10.5) }
+                    HoverHandler { id: toHov }
+                    ToolTip.visible: toHov.hovered; ToolTip.delay: 400
+                    ToolTip.text: "Bu mesaj yalnızca " + (model.to || "") + " ajanına gitti; diğer ajanlar görmedi."
+                }
                 Text { text: model.time; color: Theme.muted; font.pixelSize: Theme.fs(11) }
                 Text {
                     visible: !model.pending && model.secs > 0
@@ -211,7 +225,7 @@ Item {
 
             Rectangle {
                 id: bubble
-                readonly property bool typing: model.pending && !model.body.length
+                readonly property bool typing: model.pending && !model.body.length && !model.sealed
                 visible: !model.silent && (root.shownBody.length > 0 || model.pending)
                 Layout.alignment: isUser ? Qt.AlignRight : Qt.AlignLeft
                 implicitWidth: typing ? 68 : Math.min(body.implicitWidth + 32, root.maxW)
@@ -312,7 +326,7 @@ Item {
             Flow {
                 id: mediaFlow
                 readonly property var files: model.media ? model.media.split("\n").filter(function(f) { return f.length }) : []
-                visible: files.length > 0
+                visible: files.length > 0 && !model.sealed
                 Layout.alignment: isUser ? Qt.AlignRight : Qt.AlignLeft
                 Layout.maximumWidth: root.maxW
                 Layout.preferredWidth: root.maxW

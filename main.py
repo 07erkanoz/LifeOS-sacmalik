@@ -92,7 +92,17 @@ def is_ack(text):
 
 LIMIT_ERROR = re.compile(r"rate.?limit|usage limit|quota|limit reached|hit your limit|resource.?exhausted|\b429\b|kota", re.I)
 CLASH_SECS = 600    # aynı dosyaya bu süre içinde ikinci bir ajan yazarsa odaya uyarı düşer
-HEADER_VER = 7      # oda bilgisi değişince sürmekte olan oturumlara da bir kez gönderilir
+HEADER_VER = 8      # oda bilgisi değişince sürmekte olan oturumlara da bir kez gönderilir
+# Karar aç (20.11.2026, deniz navigasyonu deneyi): önemli bir kararda herkes ilk görüşünü ötekilerin cevabını
+# görmeden yazar; cevaplar hepsi bitince birlikte açılır, sonra sohbet serbestçe sürer. Oy ya da atanmış itirazcı yok.
+DECISION_ASK = ("Herkes önce kendi cevabını yazıyor: siz yazarken ötekilerin cevabı size gösterilmiyor, "
+                "cevaplar hepsi bitince birlikte açılacak. İki şeyi yazın: 1) Önce hangi yolu denerdin, neden? "
+                "2) Hangi bulgu ya da ölçüm fikrini değiştirirdi? Söyleyecek bir şeyin yoksa pas geçebilirsin.")
+# Ajanın @ ile başlayan mesajı yalnız andığı ajana gider (20.11.2026, Erkan'ın isteği): diğerlerine iletilmez,
+# onları uyandırmaz, dökümlerinde görünmez. Ortadaki @ ise yalnız iş devridir: anılan uyanır, mesaj herkese gider.
+DIRECT_HINT = ("Yalnızca bir ajana yazmak istersen mesajını @adıyla başlat (ör. \"@{who} …\"): o mesaj yalnızca ona "
+               "gider, diğerleri görmez ve uyanmaz; herkesin bilmesi gerekeni odaya yaz. Mesajın içinde bir ajanı @ ile "
+               "anarsan o ajan hemen söz alır.")
 # Ajanın mesajının başında oda bilgisinin kopyası ("**Konum:** … **Odadakiler:** …"): Gemini bunu rapor
 # kalıbı sanıp her mesajına koyuyordu. Bu satırlar odaya düşmeden silinir.
 ECHO_LINE = re.compile(r"^\s*(?:[-*>]\s*)?(?:\*\*|__)?(Konum|Odadakiler|Mod|Ekran|Çalışma klasörü)\s*:?\s*(?:\*\*|__)?\s*:?.*$", re.I)
@@ -214,6 +224,80 @@ PATH_RE = re.compile(r"(?:file://)?((?:~|\.{1,2})?/?[\w\-./~%]+\.(?:" + "|".join
 READ_CMDS = ["ls", "cat", "head", "tail", "find", "grep", "rg", "wc", "tree", "pwd", "file", "stat",
              "git status", "git log", "git diff", "git show"]
 
+# Süreç koruması (20.11.2026): bir ajan "pkill" ile kullanıcının açtığı uygulama penceresini de kapatmıştı.
+# Ajanların PATH'inin başına konan pkill ve killall, yalnızca odadaki ajanların başlattığı süreçlere dokunur
+# (ajanların süreçleri SACMALIK_ODA=1 ortam değişkenini taşır); başkasına ait bir eşleşme varsa hiçbirini kapatmaz.
+GUARD_DIR = DATA_DIR / "koruma"
+GUARD_SCRIPT = r"""#!/usr/bin/env python3
+# Saçmalık Odası süreç koruması: yalnız odadaki ajanların başlattığı süreçler kapatılır.
+import os, re, shutil, subprocess, sys
+name = os.path.basename(sys.argv[0])
+here = os.path.dirname(os.path.abspath(sys.argv[0]))
+path = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.abspath(p) != here)
+real = shutil.which(name, path=path)
+if not real:
+    sys.stderr.write(name + ": komut bulunamadı\n"); sys.exit(127)
+mark = ("SACMALIK_ODA=" + os.environ.get("SACMALIK_ODA", "")).encode()
+args = sys.argv[1:]
+def ours(pid):
+    try:
+        with open("/proc/%d/environ" % pid, "rb") as f:
+            return mark != b"SACMALIK_ODA=" and mark in f.read().split(b"\0")
+    except OSError:
+        return False
+def pname(pid):
+    try:
+        with open("/proc/%d/comm" % pid) as f:
+            return f.read().strip()
+    except OSError:
+        return "?"
+pids = []
+if name == "pkill":
+    q, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--signal", "-q", "--queue"):
+            i += 2; continue
+        if a.startswith("--signal=") or re.fullmatch(r"-(\d+|SIG[A-Z0-9+-]+|[A-Z][A-Z0-9+-]+)", a) or a in ("-e", "--echo"):
+            i += 1; continue
+        q.append(a); i += 1
+    pg = shutil.which("pgrep", path=path)
+    if pg:
+        out = subprocess.run([pg] + q, capture_output=True, text=True).stdout
+        pids = [int(x) for x in out.split() if x.isdigit()]
+elif name == "killall":
+    names, regex, i = [], False, 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-s", "--signal", "-u", "--user", "-o", "--older-than", "-y", "--younger-than", "-n", "--ns",
+                 "-Z", "--context"):
+            i += 2; continue
+        if a in ("-r", "--regexp"):
+            regex = True
+        elif not a.startswith("-"):
+            names.append(a)
+        i += 1
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        n = pname(int(d))
+        try:
+            exe = os.path.basename(os.readlink("/proc/%s/exe" % d))
+        except OSError:
+            exe = ""
+        if any((re.search(x, n) or re.search(x, exe)) if regex else x in (n, exe, n[:15]) for x in names):
+            pids.append(int(d))
+me = {os.getpid()}
+foreign = [p for p in pids if p not in me and not ours(p)]
+if foreign:
+    sys.stderr.write("Saçmalık Odası: bu süreçleri odadaki ajanlar başlatmadı, hiçbiri kapatılmadı: "
+                     + ", ".join("%d (%s)" % (p, pname(p)) for p in foreign[:8])
+                     + ". Kapanmaları gerekiyorsa kullanıcıya söyleyin; yalnız kendi başlattığınızı kapatmak için "
+                       "eşleşmeyi daraltın (ör. tam yol ya da PID).\n")
+    sys.exit(1)
+os.execv(real, [real] + args)
+"""
+
 _MD_CACHE = {}
 # Markdown içindeki kod, tablo ve bağlantı renkleri; QML'deki Theme ile aynı iki palet
 MD_PALETTE = {
@@ -231,6 +315,10 @@ def md_html(md, dark=True, scale=1.0):
     key = (md, dark, scale)
     if key in _MD_CACHE:
         return _MD_CACHE[key]
+    if len(_MD_CACHE) > 400:
+        # akan cevabın her ara hâli ayrı girdi oluyordu: önbellek sınırsız büyüyordu (20.11.2026 donması)
+        for k in list(_MD_CACHE)[:200]:
+            del _MD_CACHE[k]
     doc = QTextDocument()
     doc.setMarkdown(md)
     h = doc.toHtml()
@@ -285,6 +373,7 @@ DEFAULTS = {
     "autoMode": False,      # açıkken ajanlar kimse yeni bir şey söylemeyene dek konuşur
     "parallel": True,       # yeni mesajda üç ajan aynı anda çağrılır; konuşulanlar çalışanlara canlı iletilir
     "production": False,     # False = tartışma: CLI'lar salt-okunur çalışır (dosya yazamaz, komut çalıştıramaz)
+    "defaultRules": "",     # yeni sohbetlerin oda kuralları (her sohbet kendi kurallarını değiştirebilir)
     "maxChars": 60000, "maxCalls": 12, "cmdTimeout": 180, "pact": True, "liveRelay": True,
     "leanTools": True,      # ajanlar kişisel bağlayıcı/MCP sunucuları olmadan açılır (gizlilik, daha az araç tanımı)
    
@@ -389,10 +478,11 @@ def strip_echo(text, me, others):
     return text, note
 
 
-def new_chat(workdir):
+def new_chat(workdir, rules=""):
     return {"id": time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6],
             "title": "", "created": time.time(), "updated": time.time(),
-            "workDir": workdir, "messages": [], "sessions": {}, "seen": {}, "files": {}}
+            "workDir": workdir, "messages": [], "sessions": {}, "seen": {}, "files": {},
+            "rules": rules or "", "rulesRev": 0}
 
 
 def short(s, n=90):
@@ -421,13 +511,17 @@ class Room(QObject):
     statusChanged = Signal()                                # ajanların anlık durumu (panel)
     filesChanged = Signal()                                 # bu sohbette üretilen dosyalar (panel)
     rolesChanged = Signal()
+    rulesChanged = Signal()                                 # bu odanın kuralları
+    decisionChanged = Signal()                              # açık karar ve alınan kararlar
+    messageSealed = Signal(str, bool)                       # id, saklı mı: karar turunda cevap hepsi bitince açılır
+    messageTo = Signal(str, str)                            # id, kime: yalnız anılan ajana giden mesaj
     picked = Signal(str, "QVariantList")                    # tür (folder/files), seçilen yollar
     pickFailed = Signal(str)                                # hizmet yok: arayüz kendi penceresini açar
 
     def __init__(self):
         super().__init__()
         self._s = load_settings()
-        self._chat = new_chat(self._s["workDir"])
+        self._chat = new_chat(self._s["workDir"], self._s.get("defaultRules", ""))
         self._running = {}             # key -> çalışan çağrı
         self._budget = {}              # key -> kalan söz hakkı
         self._force = set()            # yeni mesaj olmasa da söz verilenler
@@ -437,6 +531,8 @@ class Room(QObject):
         self._capped = False
         self._talk_mode()              # her yeni sohbet Tartışma ile açılır
         self._resume = set()           # bilerek durdurulup yeniden başlatılacaklar (çağrı sınırına takılmaz)
+        self._handoff = set()          # başka bir ajanın @ ile andığı: bir kez, çağrı sınırına takılmadan söz alır
+        self._write_guards()
         self._snap = None              # Üretimde proje dosyalarının son fotoğrafı
         self._snap_wd = ""
         self._watch = QTimer(self)     # takılan ajan komutlarının bekçisi
@@ -547,11 +643,22 @@ class Room(QObject):
         files = self._chat.setdefault("files", {})
         if change == "silindi":
             if files.pop(path, None) is not None:
-                self.filesChanged.emit()
+                self._files_changed()
             return
         old = files.get(path)
         files[path] = {"who": who if who and who != "?" else (old or {}).get("who", ""), "t": time.time(),
                        "change": "yeni" if not old and change == "yeni" else "değişti"}
+        self._files_changed()
+
+    def _files_changed(self):
+        """Panelin dosya listesi bir kez yenilensin. Her dosya için ayrı yenileme, ajan yüzlerce dosya yazınca
+        (466 dosyalık sürüm klasörü) listeyi yüzlerce kez baştan kurup odayı donduruyordu (20.11.2026)."""
+        if not getattr(self, "_files_due", False):
+            self._files_due = True
+            QTimer.singleShot(200, self._emit_files)
+
+    def _emit_files(self):
+        self._files_due = False
         self.filesChanged.emit()
 
     def _rebuild_files(self):
@@ -830,6 +937,190 @@ class Room(QObject):
         self.rolesChanged.emit()
         self.statusText.emit("İş bölümü kaydedildi" if on else "İş bölümü kapatıldı")
 
+    # ================= oda kuralları =================
+    @Property("QVariantMap", notify=rulesChanged)
+    def rules(self):
+        """Bu odanın kuralları. Ayarlardaki oda anlaşması bütün odalarındır; bunlar yalnız bu sohbetin."""
+        text = self._chat.get("rules") or ""
+        return {"text": text, "isDefault": bool(text) and text == (self._s.get("defaultRules") or ""),
+                "defaultText": self._s.get("defaultRules") or ""}
+
+    @Slot(str, bool)
+    def setRules(self, text, as_default):
+        """Kuralları kaydet ve odaya görünür yaz. Ajanlara oda bilgisiyle gider: yeni oturumda, yeni katılan ajana
+        ve kurallar her değiştiğinde süren oturuma bir kez; döküm kırpılsa da düşmez."""
+        text = "\n".join(ln.rstrip() for ln in (text or "").strip().splitlines())[:4000]
+        if as_default != (bool(text) and text == (self._s.get("defaultRules") or "")):
+            self._s["defaultRules"] = text if as_default else ""
+            CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            CONFIG_FILE.write_text(json.dumps(self._s, indent=2, ensure_ascii=False))
+            self.settingsChanged.emit()
+        old = self._chat.get("rules") or ""
+        if text != old:
+            self._chat["rules"] = text
+            self._chat["rulesRev"] = int(self._chat.get("rulesRev", 0)) + 1
+            who = self._s["userName"]
+            if self._chat["messages"] or text:
+                note = (f"📜 {who} oda kurallarını kaldırdı." if not text else
+                        f"📜 {who} oda kurallarını {'değiştirdi' if old else 'koydu'}:\n\n{text}")
+                self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, note, True, 0, emit=True)
+                self._save_chat()
+        self.rulesChanged.emit()
+        self.statusText.emit("Oda kuralları kaydedildi" if text else "Oda kuralları kaldırıldı")
+
+    # ================= karar aç =================
+    def _decision_agents(self):
+        d = self._chat.get("decision") or {}
+        return set(d.get("agents") or []) if d.get("open") else set()
+
+    @Property("QVariantMap", notify=decisionChanged)
+    def decision(self):
+        """Açık karar: {open, q, total, answered, agents: [{key, name, color, state}]}; state: bekliyor ·
+        yazıyor · yazdı · pas. Ayrıca alınan son karar (last) ve kayıtlı kararlar (decisions)."""
+        d = self._chat.get("decision") or {}
+        sealed = {m["key"] for m in self._chat["messages"] if m.get("sealed")}
+        done = set(d.get("done") or [])
+        out = []
+        for k in d.get("agents") or []:
+            a = self._agent(k)
+            if not a:
+                continue
+            state = ("yazıyor" if k in self._running else "yazdı" if k in sealed else
+                     "hata" if k in (d.get("failed") or []) else "pas" if k in done else "bekliyor")
+            out.append({"key": k, "name": a["name"], "color": a["color"], "state": state})
+        decisions = self._chat.get("decisions") or []
+        return {"open": bool(d.get("open")), "q": d.get("q", ""), "agents": out, "total": len(out),
+                "answered": sum(1 for x in out if x["state"] in ("yazdı", "pas", "hata")),
+                "revealed": bool(d) and not d.get("open"), "last": decisions[-1]["text"] if decisions else "",
+                "decisions": decisions}
+
+    @Slot(str, result=bool)
+    def openDecision(self, q):
+        """Önemli bir kararda bağımsız ilk görüş: herkes cevabını ötekilerinkini görmeden yazar, cevaplar hepsi
+        bitince birlikte açılır. Sonra sohbet serbestçe sürer (oy, atanmış itirazcı yok)."""
+        q = " ".join((q or "").split())[:600]
+        if not q:
+            self.statusText.emit("Kararın sorusunu yazın")
+            return False
+        if self._running:
+            self.statusText.emit("Ajanlar çalışırken karar açılmaz: bitmelerini bekleyin ya da Durdur'a basın")
+            return False
+        muted = set(self._chat.get("muted", []))
+        keys = [a["key"] for a in self._enabled() if a["key"] not in muted]
+        if not keys:
+            self.statusText.emit("Odada sözü açık ajan yok")
+            return False
+        who = self._s["userName"]
+        self._post_pact("talk")
+        mid = uuid.uuid4().hex
+        self._append_msg(mid, "system", "Oda", SYSTEM_COLOR,
+                         f"🗳 {who} karar açtı: **{q}**\n\n{DECISION_ASK}", True, 0, emit=True)
+        if not self._chat.get("title"):
+            self._chat["title"] = q[:70]
+        self._chat["decision"] = {"q": q, "agents": keys, "open": True, "t": time.time(), "mid": mid, "done": []}
+        self._log("decision_open", q=q, agents=keys)
+        self._budget.clear()
+        self._force.clear()
+        for k in keys:
+            self._budget[k] = 1
+            self._force.add(k)
+        self._stopped = False
+        self._calls = 0
+        self._capped = False
+        self._save_chat()
+        self.chatsChanged.emit()
+        self.decisionChanged.emit()
+        self._schedule()
+        return True
+
+    def _decision_check(self, key, answered, failed=False):
+        """Karar turundaki bir ajan bitti: hepsi bittiyse cevapları aç."""
+        d = self._chat.get("decision") or {}
+        if not d.get("open") or key not in d.get("agents", []):
+            return
+        if answered and key not in d["done"]:
+            d["done"].append(key)
+        if failed and key not in d.setdefault("failed", []):
+            d["failed"].append(key)
+        self.decisionChanged.emit()
+        if all(k in d["done"] for k in d["agents"]) and not any(k in self._running for k in d["agents"]):
+            self._reveal()
+
+    @Slot()
+    def revealNow(self):
+        """Bekleyenleri beklemeden cevapları aç: o an yazmakta olanın cevabı geldiğinde doğrudan odaya düşer."""
+        if (self._chat.get("decision") or {}).get("open"):
+            self._reveal(early=True)
+
+    def _reveal(self, early=False):
+        d = self._chat["decision"]
+        d["open"] = False
+        sealed = [m for m in self._chat["messages"] if m.get("sealed")]
+        for m in sealed:
+            self._chat["messages"].remove(m)
+        names = self._names
+        wrote = list(dict.fromkeys(m["key"] for m in sealed))
+        failed = [k for k in d["agents"] if k not in wrote and k in d.get("failed", [])]
+        passed = [k for k in d["agents"] if k not in wrote and k in d["done"] and k not in failed]
+        waiting = [k for k in d["agents"] if k not in wrote and k not in d["done"]]
+        text = f"🗳 Cevaplar açıldı: {names(wrote)} yazdı" if wrote else "🗳 Cevaplar açıldı: kimse cevap yazmadı"
+        if passed:
+            text += f"; {names(passed)} pas geçti"
+        if failed:
+            text += f"; {names(failed)} hata verdi"
+        if waiting:
+            text += f"; {names(waiting)} henüz yazmadı, cevabı gelince doğrudan odaya düşecek"
+        text += ". Artık birbirinizin cevabını görüyorsunuz; sohbet serbest."
+        self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, text, True, 0, emit=True)
+        # cevaplar açıldıkları anda odaya düşer: sıra numaraları (kimin neyi gördüğü) bozulmasın
+        for m in sealed:
+            m.pop("sealed", None)
+            m["ts"] = round(time.time(), 1)
+            self._chat["messages"].append(m)
+            self.messageSealed.emit(m["id"], False)
+            self._broadcast(m)
+        self._log("decision_reveal", early=early, wrote=wrote, passed=passed, waiting=waiting)
+        n = INF if self._s.get("autoMode") else max(1, int(self._s["autoRounds"]))
+        for a in self._enabled():
+            if a["key"] not in self._chat.get("muted", []):
+                self._budget[a["key"]] = n
+        self._stopped = False
+        self._calls = 0
+        self._capped = False
+        self._save_chat()
+        self.decisionChanged.emit()
+        QTimer.singleShot(0, self._schedule)
+
+    @Slot(str)
+    def recordDecision(self, text):
+        """Alınan kararı tek cümleyle kaydet: odaya sabitlenmiş olarak düşer, ajanlara oda bilgisiyle gider."""
+        text = " ".join((text or "").split())[:600]
+        if not text:
+            return
+        d = self._chat.get("decision") or {}
+        self._chat.setdefault("decisions", []).append({"q": d.get("q", ""), "text": text, "t": time.time()})
+        self._chat["decisionsRev"] = int(self._chat.get("decisionsRev", 0)) + 1
+        mid = uuid.uuid4().hex
+        self._append_msg(mid, "system", "Oda", SYSTEM_COLOR, f"✅ {self._s['userName']} kararı yazdı: **{text}**",
+                         True, 0, emit=True)
+        self._chat["messages"][-1]["pinned"] = True
+        self.messagePinned.emit(mid, True)
+        self._save_chat()
+        self.decisionChanged.emit()
+        self.statusText.emit("Karar kaydedildi")
+
+    @Slot(str)
+    def startProduction(self, text):
+        """Üretimi aç ve hangi kararın uygulandığını tek cümleyle odaya yaz (boşsa yalnız mod değişir)."""
+        text = " ".join((text or "").split())[:600]
+        if text != (self._chat.get("prodDecision") or ""):
+            self._chat["prodDecision"] = text
+            self._chat["decisionsRev"] = int(self._chat.get("decisionsRev", 0)) + 1
+        self._prod_note = text
+        s = json.loads(json.dumps(self._s))
+        s["production"] = True
+        self.saveSettings(s)
+
     @staticmethod
     def _with_meaning(x):
         """Açıklaması yazılmamış hazır iş (Plan, Kod…): varsayılan anlamıyla."""
@@ -843,7 +1134,9 @@ class Room(QObject):
         return ns[0] if len(ns) == 1 else ", ".join(ns[:-1]) + " ve " + ns[-1] if ns else ""
 
     def _hdr_ver(self):
-        return HEADER_VER * 1000 + int(self._chat.get("rolesRev", 0))
+        """Oda bilgisinin sürümü: roller, kurallar ya da kararlar değişince süren oturumlara da bir kez yeniden gider."""
+        c = self._chat
+        return f"{HEADER_VER}.{c.get('rolesRev', 0)}.{c.get('rulesRev', 0)}.{c.get('decisionsRev', 0)}"
 
     def _role_lines(self, agent):
         r = self.roles
@@ -1072,6 +1365,11 @@ class Room(QObject):
                          f"{who} Tartışma moduna geçti: proje dosyaları yalnızca okunur. Bu makinede Tartışma kutusu kurulamadı; dosya üretimi kullanılamıyor."))
                 self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR, note, True, 0, emit=True)
                 if clean["production"]:
+                    note = getattr(self, "_prod_note", "")
+                    self._prod_note = ""
+                    if note:
+                        self._append_msg(uuid.uuid4().hex, "system", "Oda", SYSTEM_COLOR,
+                                         f"🎯 Üretim şu kararla açıldı: **{note}**", True, 0, emit=True)
                     self._post_pact("prod")
                     # üretimi açmak senin hamlen: her ajan notu yeni izinleriyle görsün
                     # (boştakiler hemen, çalışanlar mevcut turunu bitirince)
@@ -1133,11 +1431,13 @@ class Room(QObject):
     @Slot()
     def newChat(self):
         self.stop()
-        self._chat = new_chat(self._s["workDir"])
+        self._chat = new_chat(self._s["workDir"], self._s.get("defaultRules", ""))
         self._talk_mode()
         self.roomReset.emit()
         self.filesChanged.emit()
         self.rolesChanged.emit()
+        self.rulesChanged.emit()
+        self.decisionChanged.emit()
         self.statusChanged.emit()
         self.chatsChanged.emit()
         self.statusText.emit("Yeni sohbet — bir konu aç")
@@ -1166,6 +1466,8 @@ class Room(QObject):
         self.roomReset.emit()
         self.filesChanged.emit()
         self.rolesChanged.emit()
+        self.rulesChanged.emit()
+        self.decisionChanged.emit()
         self.statusChanged.emit()
         ids = [m.get("id") for m in c["messages"]]
         for m in c["messages"]:
@@ -1180,6 +1482,10 @@ class Room(QObject):
             self.messageDone.emit(mid, m.get("ok", True), m.get("secs", 0))
             if m.get("pinned"):
                 self.messagePinned.emit(mid, True)
+            if m.get("to"):
+                self.messageTo.emit(mid, self._names(m["to"]))
+            if m.get("sealed"):
+                self.messageSealed.emit(mid, True)
         self.chatsChanged.emit()
         self.statusText.emit(f"Sohbet açıldı · {c.get('workDir') or self._s['workDir']}")
 
@@ -1245,7 +1551,19 @@ class Room(QObject):
             json.dumps(self._chat, indent=1, ensure_ascii=False))
 
     def _transcript(self):
-        return [m for m in self._chat["messages"] if m.get("ok", True)]
+        """Ajanlara giden döküm. Karar turunda saklanan cevaplar hepsi bitince açılır, o zamana dek burada yoktur."""
+        return [m for m in self._chat["messages"] if m.get("ok", True) and not m.get("sealed")]
+
+    @staticmethod
+    def _for(m, a):
+        """Bu mesaj bu ajana gider mi: @ ile başlayan ajan mesajı yalnız andığı ajana (ve yazana) gider."""
+        to = m.get("to")
+        return not to or a["key"] in to or m.get("key") == a["key"]
+
+    @staticmethod
+    def _noise(m):
+        """Yeni bilgi taşımayan mesaj: kısa onay ya da aynı ajanın az önce söylediğinin tekrarı."""
+        return is_ack(m.get("text")) or bool(m.get("repeat"))
 
     # ================= söz alma =================
     def _enabled(self):
@@ -1355,6 +1673,20 @@ class Room(QObject):
         self._capped = False
         self._schedule()
 
+    @Property(bool, notify=busyChanged)
+    def capped(self):
+        """Elle modda çağrı sınırı doldu: odada "Devam et" görünür."""
+        return bool(self._capped) and not self._s.get("autoMode")
+
+    @Slot()
+    def goOn(self):
+        """Çağrı sınırında kalınan yerden sür: kalan söz hakları aynen, sayaç sıfırdan."""
+        self._calls = 0
+        self._capped = False
+        self._stopped = False
+        self._log("go_on")
+        self._schedule()
+
     @Slot(str)
     def poke(self, key):
         """Belirli bir ajana söz ver (yeni mesaj olmasa bile)."""
@@ -1380,8 +1712,8 @@ class Room(QObject):
 
     def _has_unseen(self, a):
         user = self._s["userName"]
-        return any(m["name"] != a["name"] and m["key"] != "system"
-                   and (m["name"] == user or not is_ack(m["text"]))
+        return any(m["name"] != a["name"] and m["key"] != "system" and self._for(m, a)
+                   and (m["name"] == user or not self._noise(m))
                    for m in self._transcript()[self._seen(a["key"]):])
 
     def _schedule(self):
@@ -1401,8 +1733,11 @@ class Room(QObject):
                     continue      # sözü kapalı: yalnız adına tıklayınca ya da @ ile konuşur
                 if k not in self._force and not self._has_unseen(a):
                     continue
-                cap = int(self._s.get("maxCalls") or 0)
-                if cap > 0 and self._calls >= cap and k not in self._resume:   # yarıda kesileni sınır engellemez
+                # Oto'da sayı sınırı yok: Oto "sen durdurana kadar" demek (20.11.2026). Boşa dönmeyi onay ve tekrar
+                # süzgeci önler: yeni bilgi taşımayan mesaj kimseyi uyandırmaz. Elle modda sınır sürer; yarıda
+                # kesilen ve başka bir ajanın @ ile iş devrettiği ajan sınıra takılmaz.
+                cap = 0 if self._s.get("autoMode") else int(self._s.get("maxCalls") or 0)
+                if cap > 0 and self._calls >= cap and k not in self._resume and k not in self._handoff:
                     if not self._capped:
                         self._log("cap", calls=self._calls)
                     self._capped = True
@@ -1410,6 +1745,7 @@ class Room(QObject):
                 self._calls += 1
                 self._force.discard(k)
                 self._resume.discard(k)
+                self._handoff.discard(k)
                 self._budget[k] -= 1
                 if limit == 1:
                     self._rr = (self._rr + j + 1) % n
@@ -1419,7 +1755,7 @@ class Room(QObject):
         self.statusChanged.emit()
         if not self._running:
             if self._capped:
-                self.statusText.emit(f"Çağrı sınırı doldu ({self._calls}) — sıra sende")
+                self.statusText.emit(f"Çağrı sınırı doldu ({self._calls}) — sürdürmek için Devam et")
             else:
                 self.statusText.emit("Oda sessiz — sıra sende")
         else:
@@ -1555,28 +1891,104 @@ class Room(QObject):
              "ok": ok, "secs": round(secs, 1), "time": t, "ts": round(time.time(), 1)}
         if acts:
             m["acts"] = acts
+        agent_msg = ok and key not in ("system", "user")
+        if agent_msg:
+            to = self._directed(text, key)
+            if to:
+                m["to"] = to
+            if self._repeats(key, text):
+                m["repeat"] = True
+            if key in self._decision_agents():
+                m["sealed"] = True
         self._chat["messages"].append(m)
         self._log("message", id=mid, author=name, key=key, ok=ok, secs=round(secs, 1), text=text,
-                  acts=acts or [])
+                  acts=acts or [], to=m.get("to") or [], sealed=bool(m.get("sealed")), repeat=bool(m.get("repeat")))
         if emit:
             self.messageAdded.emit(mid, key, name, color, text, False, t)
-        if ok:
-            self._broadcast(name, text)
+        if m.get("to"):
+            self.messageTo.emit(mid, self._names(m["to"]))
+        if m.get("sealed"):
+            self.messageSealed.emit(mid, True)
+            self.decisionChanged.emit()
+        elif ok:
+            self._broadcast(m)
+            if agent_msg:
+                self._pass_on(m)
 
-    def _broadcast(self, author, text):
+    def _directed(self, text, me):
+        """Mesaj @ ile başlıyorsa andığı ajanlar (yazan hariç): mesaj yalnız onlara gider."""
+        t = re.sub(r"^[\s*_>]+", "", text or "")
+        out, agents = [], sorted(self._enabled(), key=lambda a: -len(a["name"]))
+        while t.startswith("@"):
+            low, hit = t.lower(), None
+            for a in agents:
+                for w in ("@" + a["name"].lower(), "@" + a["key"].lower()):
+                    if low.startswith(w) and not re.match(r"[\w-]", low[len(w):len(w) + 1]):
+                        hit = (a["key"], len(w))
+                        break
+                if hit:
+                    break
+            if not hit:
+                break
+            if hit[0] != me and hit[0] not in out:
+                out.append(hit[0])
+            t = re.sub(r"^\W*?(?:ve\s+|,\s*)?(?=@)|^[\s,;:]+", "", t[hit[1]:])
+        return out
+
+    def _repeats(self, key, text):
+        """Aynı ajan az önce neredeyse aynısını söylediyse ("raporu bekliyorum" tekrarı): yeni bilgi sayılmaz."""
+        import difflib
+        t = (text or "")[:1500]
+        if len(t) < 20:
+            return False
+        prev = [m["text"][:1500] for m in reversed(self._chat["messages"])
+                if m.get("key") == key and m.get("ok", True)][:3]
+        for p in prev:
+            sm = difflib.SequenceMatcher(None, t, p, autojunk=False)
+            if sm.quick_ratio() > 0.85 and sm.ratio() > 0.85:
+                return True
+        return False
+
+    def _pass_on(self, m):
+        """İş devri: ajanın @ ile andığı ajan (sözü kapalı değilse) hemen bir kez söz alır, çağrı sınırı dolmuş olsa
+        bile. 20.11.2026: araştırma geldiğinde planı yazacak ajanı çağıracak hak kalmamıştı, oda 18 dakika bekledi."""
+        if m.get("repeat"):
+            return
+        muted = set(self._chat.get("muted", []))
+        keys = [k for k in dict.fromkeys((m.get("to") or []) + self._mentions(m["text"]))
+                if k != m["key"] and k not in muted]
+        if not keys:
+            return
+        for k in keys:
+            self._budget[k] = max(1, self._budget.get(k, 0))
+            self._handoff.add(k)
+        self._log("handoff", by=m["name"], to=[self._agent(k)["name"] for k in keys if self._agent(k)])
+        if not self._stopped:
+            QTimer.singleShot(0, self._schedule)
+
+    def _line(self, m):
+        """Dökümdeki ve canlı iletimdeki satır: özel mesajda kime gittiği de yazar."""
+        to = m.get("to")
+        who = m["name"] + (f" → {self._names(to)} (yalnız {'sana' if len(to) == 1 else 'size'})" if to else "")
+        return f"{who}: {m['text']}"
+
+    def _broadcast(self, m):
         """Odaya yeni düşen bir mesajı, o an çalışan ve canlı girdi alan ajanlara hemen yaz."""
-        line = f"{author}: {text}"
+        author, text = m["name"], m["text"]
+        line = self._line(m)
         n = len(self._transcript())
-        cap = int(self._s.get("maxCalls") or 0)
-        if cap > 0 and self._calls >= cap and author != self._s["userName"]:
+        cap = 0 if self._s.get("autoMode") else int(self._s.get("maxCalls") or 0)
+        if cap > 0 and self._calls >= cap and author != self._s["userName"] and not m.get("to"):
             return     # sınır doldu: ajanlar arası canlı iletim de durur; sen yazınca kaldıkları yerden alırlar
         if not self._s.get("liveRelay", True) and author != self._s["userName"]:
             return     # canlı iletim kapalı: ajanlar birbirini sıraları gelince toplu okur (kota için); senin sözün yine anında gider
-        if author != self._s["userName"] and is_ack(text):
-            return     # kısa onay/bekleme: çalışanı bölmeye değmez, sonraki çağrıda dökümde görülür
+        if author != self._s["userName"] and self._noise(m):
+            return     # kısa onay/bekleme ya da tekrar: çalışanı bölmeye değmez, sonraki çağrıda dökümde görülür
         for cur in self._running.values():
             if not cur.get("live_in") or cur.get("in_closed") or cur.get("stale") or cur["agent"]["name"] == author:
                 continue
+            if not self._for(m, cur["agent"]):
+                continue     # özel mesaj: yalnız anılan ajana
             if cur["proc"].state() != QProcess.Running:
                 continue
             if cur["fmt"] == "cxs":
@@ -1617,28 +2029,46 @@ class Room(QObject):
                  f"Bu bir sohbet odası ve sen {agent['name']} olarak buradasın. Odada ayrıca {', '.join(others)} var.",
                  f"Çalışma klasörü {self._workdir()}. {mode}",
                  "Mesajda yolu geçen ya da yazılan resim (png, jpg, gif, webp, svg), video (mp4, webm, mov), "
-                 "ses (mp3, wav, ogg), html ve pdf dosyaları odada herkese gösterilir."]
-        return "\n".join(lines + self._role_lines(agent))
+                 "ses (mp3, wav, ogg), html ve pdf dosyaları odada herkese gösterilir.",
+                 DIRECT_HINT.replace("{who}", next((a["name"] for a in self._enabled() if a["key"] != agent["key"]),
+                                                   "Ad"))]
+        if self._s.get("production"):
+            lines.append(f"Odadaki ajanların başlatmadığı süreçleri (örneğin {self._s['userName']} tarafından açılmış "
+                         f"pencere ve uygulamaları) kapatma; kapanması gerekiyorsa bunu {self._s['userName']} ile konuş.")
+        return "\n".join(lines + self._rule_lines() + self._role_lines(agent))
 
-    @staticmethod
-    def _fmt(msgs):
-        return "\n\n".join(f"{m['name']}: {m['text']}" for m in msgs)
+    def _rule_lines(self):
+        """Odaya özel kurallar ve alınan kararlar: her yeni oturumda ve değiştiklerinde gider, dökümle kırpılmaz."""
+        out, user = [], self._s["userName"]
+        rules = (self._chat.get("rules") or "").strip()
+        if rules:
+            out.append(f"{user} bu oda için şu kuralları koydu; sohbet boyunca geçerlidir:\n{rules}")
+        done = [d for d in self._chat.get("decisions") or [] if d.get("text")]
+        if done:
+            out.append("Bu odada alınan kararlar (en yenisi sonda):\n" + "\n".join(f"- {d['text']}" for d in done[-6:]))
+        if self._s.get("production") and self._chat.get("prodDecision"):
+            out.append(f"Üretim şu kararla açıldı: {self._chat['prodDecision']}")
+        return out
+
+    def _fmt(self, msgs):
+        return "\n\n".join(self._line(m) for m in msgs)
 
     def _prompt_for(self, agent, resumed):
         """Oturum sürüyorsa yalnızca ajanın kaçırdıkları; yoksa konum + odadakiler + tüm döküm."""
         tr = self._transcript()
+        mine = [m for m in tr if self._for(m, agent)]      # başkasına özel mesajlar bu ajana gitmez
         if resumed:
-            new = [m for m in tr[self._seen(agent["key"]):] if m["name"] != agent["name"]]
-            body = self._fmt(new or tr[-1:])
+            new = [m for m in tr[self._seen(agent["key"]):] if m["name"] != agent["name"] and self._for(m, agent)]
+            body = self._fmt(new or mine[-1:])
             if self._chat.get("hdr", {}).get(agent["key"], 0) != self._hdr_ver():
                 body = self._header(agent) + "\n\n" + body     # oturum eski oda bilgisiyle açılmıştı
             return body
-        body = self._fmt(tr)
+        body = self._fmt(mine)
         mx = int(self._s["maxChars"])
         if len(body) > mx:
             body = body[-mx:]
         # sabitlenen mesajlar kırpmada düşmesin: dökümde kalmadıysa başa, olduğu gibi eklenir
-        lost = [m for m in tr if m.get("pinned") and self._fmt([m]) not in body]
+        lost = [m for m in mine if m.get("pinned") and self._fmt([m]) not in body]
         if lost:
             body = (f"Sabitlenen mesajlar ({self._s['userName']} sabitledi; döküm uzun olduğu için "
                     f"aşağıda yer almıyor olabilirler):\n\n" + self._fmt(lost) + "\n\n---\n\n" + body)
@@ -1807,13 +2237,28 @@ class Room(QObject):
             cls._shell_path = found
         return cls._shell_path
 
+    @staticmethod
+    def _write_guards():
+        try:
+            GUARD_DIR.mkdir(parents=True, exist_ok=True)
+            for n in ("pkill", "killall"):
+                f = GUARD_DIR / n
+                if not f.exists() or f.read_text() != GUARD_SCRIPT:
+                    f.write_text(GUARD_SCRIPT)
+                    f.chmod(0o755)
+        except OSError:
+            pass
+
     def _env(self):
         env = QProcessEnvironment.systemEnvironment()
         for k in list(env.keys()):
             if k == "CLAUDECODE" or k.startswith("CLAUDE_CODE_"):
                 env.remove(k)
         env.insert("NO_COLOR", "1")
+        env.insert("SACMALIK_ODA", "1")     # süreç koruması: ajanların başlattığı süreçler bu işareti taşır
         path = [p for p in env.value("PATH", "").split(":") if p]
+        if (GUARD_DIR / "pkill").exists():
+            path = [str(GUARD_DIR)] + [p for p in path if p != str(GUARD_DIR)]
         for p in self._user_path():
             if p not in path:
                 path.append(p)
@@ -1934,6 +2379,9 @@ class Room(QObject):
                   production=bool(self._s.get("production")), resumed=bool(sid), session=sid or "",
                   call=self._calls, seen=len(self._transcript()), prompt=prompt, argv=args)
         self.messageAdded.emit(mid, key, a["name"], a["color"], "", True, time.strftime("%H:%M"))
+        if key in self._decision_agents():
+            self.messageSealed.emit(mid, True)      # karar turu: cevap yazılırken de saklı
+            self.decisionChanged.emit()
         p = QProcess(self)
         p.setProcessEnvironment(self._env())
         p.setWorkingDirectory(self._workdir())
@@ -2079,6 +2527,20 @@ class Room(QObject):
                             self._log("cmd_timeout", id=cur["id"], agent=cur["agent"]["name"], cmd=name, secs=limit)
             except psutil.Error:
                 continue
+
+    def _live_text(self, cur, text):
+        """Akan cevap ekrana saniyede en çok dört kez yazılsın. Antigravity cevabı parça parça gönderiyor; her
+        parçada bütün metin yeniden biçimleniyordu, uzun cevapta oda donuyordu (20.11.2026)."""
+        cur["live_shown"] = text
+        if not cur.get("live_due"):
+            cur["live_due"] = True
+            QTimer.singleShot(250, lambda c=cur: self._flush_live(c))
+
+    def _flush_live(self, cur):
+        cur["live_due"] = False
+        text = cur.pop("live_shown", None)
+        if text is not None and not cur.get("finished"):
+            self.messageUpdated.emit(cur["id"], text)
 
     def _act(self, cur, line):
         cur["acts"].append(line)
@@ -2385,7 +2847,7 @@ class Room(QObject):
                 self._act(cur, "↩ yeni mesajı aldı")
             elif st.get("step_type") == "agent_response" and st.get("text_delta"):
                 cur["live"] += st["text_delta"]
-                self.messageUpdated.emit(cur["id"], cur["live"].strip())
+                self._live_text(cur, cur["live"].strip())
         elif e == "result":
             r = ev.get("result") or {}
             cur["new_sid"] = r.get("conversation_id") or cur["new_sid"]
@@ -2698,11 +3160,14 @@ class Room(QObject):
             self._attach_media(cur, cur["id"], text)
             self.messageUpdated.emit(cur["id"], text + (f"\n\n_⚠ {echo_note}_" if echo_note else ""))
             self.messageDone.emit(cur["id"], True, dt)
+            cur.pop("live_shown", None)     # bekleyen ara görüntü yeni balona yazılmasın
             if count:
                 self._calls += 1      # açık süreçteki her yeni tur da bir çağrı sayılır
             self._log("turn", id=cur["id"], agent=a["name"], secs=round(dt, 1), call=self._calls)
             cur["id"] = uuid.uuid4().hex
             self.messageAdded.emit(cur["id"], key, a["name"], a["color"], "", True, time.strftime("%H:%M"))
+            if key in self._decision_agents():
+                self.messageSealed.emit(cur["id"], True)
             cur["acts"], cur["t0"] = [], time.time()
         self._report_changes(cur)
         # oturum ve görülen konum şimdiden kayda geçsin
@@ -2830,6 +3295,9 @@ class Room(QObject):
         self._report_changes(cur)
         if not self._running:
             self._snap = None     # oda boşaldı: senin aradaki değişikliklerin bir ajana yazılmasın
+        if not ok:
+            self.messageSealed.emit(cur["id"], False)     # hata, pas ya da durdurma notu saklanmaz
+        self._decision_check(key, not stopped and not restart, failed)
         self._save_chat()
         self.chatsChanged.emit()
         cur["proc"].deleteLater()

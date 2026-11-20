@@ -243,7 +243,7 @@ ApplicationWindow {
         target: room
         function onMessageAdded(id, key, name, color, text, pending, time) {
             var item = { mid: id, key: key, name: name, color: color, body: text,
-                         pending: pending, ok: true, secs: 0, silent: false, acts: "", media: "", pinned: false,
+                         pending: pending, ok: true, secs: 0, silent: false, acts: "", media: "", pinned: false, sealed: false, to: "",
                          time: time || Qt.formatTime(new Date(), "HH:mm") }
             if (pending) msgs.append(item)
             else msgs.insert(firstPending(), item)
@@ -262,6 +262,14 @@ ApplicationWindow {
             var i = indexOfId(id); if (i < 0) return
             msgs.setProperty(i, "media", paths)
             if (i === msgs.count - 1 || chat.atYEnd) Qt.callLater(chat.positionViewAtEnd)
+        }
+        function onMessageSealed(id, on) {
+            var i = indexOfId(id); if (i < 0) return
+            msgs.setProperty(i, "sealed", on)
+        }
+        function onMessageTo(id, names) {
+            var i = indexOfId(id); if (i < 0) return
+            msgs.setProperty(i, "to", names)
         }
         function onMessageSilent(id) {
             var i = indexOfId(id); if (i < 0) return
@@ -582,7 +590,8 @@ ApplicationWindow {
                         MouseArea {
                             id: modeMa
                             anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                            onClicked: { var s = cfg; s.production = !modeSw.prod; room.saveSettings(s)
+                            onClicked: { if (!modeSw.prod && msgs.count > 0) { decDlg.show("prod"); return }
+                                         var s = cfg; s.production = !modeSw.prod; room.saveSettings(s)
                                          win.status = s.production ? "Üretim: ajanlar dosya yazabilir, komut çalıştırabilir"
                                                                    : (room.jailOk ? "Tartışma: proje kilitli, yalnızca taslak/ klasörüne yazılabilir"
                                                                                   : "Tartışmada dosya üretimi kullanılamıyor: bu makinede kutu (bubblewrap) kurulamadı") }
@@ -681,6 +690,38 @@ ApplicationWindow {
                         ToolTip.visible: rolesMa.containsMouse; ToolTip.delay: 400
                         ToolTip.text: rolesChip.on ? "Bu sohbette iş bölümü açık. Değiştirmek ya da kapatmak için tıkla."
                                                    : "İş bölümü kapalı. Kim planı, kim kodu, kim görseli yapacak: bu sohbet için belirle."
+                    }
+                    // oda kuralları: yalnız bu sohbetin; konmuşsa renkli
+                    Rectangle {
+                        id: rulesChip
+                        readonly property bool on: !!room.rules.text
+                        implicitWidth: rulesTxt.implicitWidth + 22; implicitHeight: 32; radius: 8
+                        color: on ? Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.2) : rulesMa.containsMouse ? Theme.cardHi : Theme.field
+                        border.color: on ? Theme.user : Theme.line
+                        Text { id: rulesTxt; anchors.centerIn: parent; text: topRow.tight ? "📜" : "📜 Kurallar"
+                               color: rulesChip.on ? Theme.text : Theme.textDim; font.pixelSize: Theme.fs(12) }
+                        MouseArea { id: rulesMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: rulesDlg.open() }
+                        ToolTip.visible: rulesMa.containsMouse; ToolTip.delay: 400
+                        ToolTip.text: rulesChip.on ? "Bu odanın kuralları var. Görmek ya da değiştirmek için tıkla."
+                                                   : "Bu oda için kural koy: ajanlar sohbet boyunca unutmaz."
+                    }
+                    // karar aç: önemli kararda bağımsız ilk görüş
+                    Rectangle {
+                        id: decChip
+                        readonly property bool on: room.decision.open
+                        implicitWidth: decTxt.implicitWidth + 22; implicitHeight: 32; radius: 8
+                        opacity: on || !room.busy ? 1 : 0.45
+                        color: on ? Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.2) : decMa.containsMouse ? Theme.cardHi : Theme.field
+                        border.color: on ? Theme.user : Theme.line
+                        Text { id: decTxt; anchors.centerIn: parent; text: topRow.tight ? "🗳" : "🗳 Karar aç"
+                               color: decChip.on ? Theme.text : Theme.textDim; font.pixelSize: Theme.fs(12) }
+                        MouseArea { id: decMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                    onClicked: { if (decChip.on) return
+                                                 if (room.busy) { win.status = "Ajanlar çalışırken karar açılmaz: bitmelerini bekleyin ya da Durdur"; return }
+                                                 decDlg.show("open") } }
+                        ToolTip.visible: decMa.containsMouse; ToolTip.delay: 400
+                        ToolTip.text: decChip.on ? "Karar açık: cevaplar hepsi bitince birlikte açılacak."
+                                                 : "Önemli bir kararda herkes ilk görüşünü ötekilerin cevabını görmeden yazar;\ncevaplar birlikte açılır, sonra sohbet serbestçe sürer."
                     }
                     // durum paneli: aç / kapat
                     Rectangle {
@@ -819,6 +860,55 @@ ApplicationWindow {
                         Text { anchors.horizontalCenter: parent.horizontalCenter; color: Theme.muted; font.pixelSize: Theme.fs(11)
                                text: "Klasörü pencereye sürükleyip bırakabilirsiniz" }
                     }
+                }
+            }
+
+            // oda şeridi: açık karar, cevaplar açılınca "Kararı yaz", elle modda çağrı sınırı
+            Rectangle {
+                id: strip
+                readonly property var dc: room.decision
+                property string dismissedQ: ""
+                readonly property bool showDec: dc.open
+                readonly property bool showRecord: !dc.open && dc.revealed && !!dc.q && dismissedQ !== dc.q
+                                                   && !(dc.decisions || []).some(function(x) { return x.q === dc.q })
+                readonly property bool showCap: room.capped && !dc.open
+                visible: showDec || showRecord || showCap
+                Layout.alignment: Qt.AlignHCenter
+                Layout.preferredWidth: Math.min(parent.width - 40, Theme.column)
+                Layout.topMargin: 6
+                implicitHeight: stripRow.implicitHeight + 16
+                radius: 12
+                color: Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.10)
+                border.color: Qt.rgba(Theme.user.r, Theme.user.g, Theme.user.b, 0.45)
+                RowLayout {
+                    id: stripRow
+                    anchors.fill: parent; anchors.margins: 8; anchors.leftMargin: 14
+                    spacing: 10
+                    Text {
+                        Layout.fillWidth: true; elide: Text.ElideRight; color: Theme.text; font.pixelSize: Theme.fs(12.5)
+                        text: strip.showDec ? "🗳 Karar açık (" + strip.dc.answered + "/" + strip.dc.total + " cevap): " + strip.dc.q
+                            : strip.showRecord ? "🗳 Cevaplar açıldı. Karar verildiğinde tek cümleyle yazabilirsin: " + strip.dc.q
+                            : "Çağrı sınırı doldu: ajanlar kaldıkları yerde bekliyor."
+                    }
+                    Repeater {
+                        model: strip.showDec ? strip.dc.agents : []
+                        Rectangle {
+                            implicitWidth: agT.implicitWidth + 16; implicitHeight: 24; radius: 12
+                            color: modelData.state === "yazdı" ? Qt.rgba(Qt.color(modelData.color).r, Qt.color(modelData.color).g, Qt.color(modelData.color).b, 0.25) : "transparent"
+                            border.color: modelData.color
+                            opacity: modelData.state === "bekliyor" ? 0.55 : 1
+                            Text { id: agT; anchors.centerIn: parent; color: Theme.textDim; font.pixelSize: Theme.fs(11)
+                                   text: modelData.name + (modelData.state === "yazdı" ? " ✓" : modelData.state === "pas" ? " · pas" : modelData.state === "hata" ? " · hata"
+                                                         : modelData.state === "yazıyor" ? " …" : "") }
+                        }
+                    }
+                    GhostButton { visible: strip.showDec; text: "Şimdi aç"; implicitHeight: 28; onClicked: room.revealNow()
+                                  ToolTip.visible: hovered; ToolTip.delay: 400
+                                  ToolTip.text: "Bekleyenleri beklemeden cevapları aç. Hâlâ yazanın cevabı gelince doğrudan odaya düşer." }
+                    GhostButton { visible: strip.showRecord; text: "Kararı yaz"; implicitHeight: 28; onClicked: decDlg.show("record") }
+                    GhostButton { visible: strip.showRecord; text: "✕"; implicitHeight: 28; implicitWidth: 28
+                                  onClicked: strip.dismissedQ = strip.dc.q }
+                    GhostButton { visible: strip.showCap; text: "▶  Devam et"; implicitHeight: 28; onClicked: room.goOn() }
                 }
             }
 
@@ -1034,6 +1124,8 @@ ApplicationWindow {
     }
 
     RolesDialog { id: rolesDlg }
+    RulesDialog { id: rulesDlg; objectName: "rulesDlg" }
+    DecisionDialog { id: decDlg; objectName: "decDlg" }
 
     Dialog {
         id: delDlg

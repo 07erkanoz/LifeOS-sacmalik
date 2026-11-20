@@ -27,6 +27,18 @@ hangi modda olduklarını ve ekranın neler gösterebildiğini bilir.
   - **Üretim:** dosya yazabilir, komut çalıştırabilir, internete çıkabilirler.
 - **Oda anlaşması:** odaya görünür düşen iki kısa kural: ortak karar diye aktarırken kimin desteklediğini söyle;
   üretimde üstlendiğin parçayı söyle, başkasının yazdığını onaysız ezme. Ayarlardan kapatılır.
+- **Oda kuralları:** 📜 Kurallar ile yalnız bu sohbete kural koyulur (ayarlardaki anlaşma bütün odalarındır).
+  Ajanlara oda bilgisiyle gider: odaya katılınca, oturum yeniden açılınca ve kurallar her değiştiğinde; uzun
+  sohbette döküm kırpılsa da düşmez. İstenirse yeni sohbetler de bu kurallarla açılır.
+- **Karar aç:** 🗳 ile önemli bir kararda sözü açık her ajan ilk görüşünü ötekilerin cevabını görmeden yazar
+  ("önce hangi yolu denerdin, hangi bulgu fikrini değiştirirdi?"). Cevaplar hepsi bitince birlikte açılır, sonra
+  sohbet serbestçe sürer; oy ya da atanmış itirazcı yoktur. Alınan karar tek cümleyle yazılır, odaya sabitlenir.
+  Üretim açılırken hangi kararın uygulandığı sorulur.
+- **Özel mesaj ve iş devri:** bir ajanın `@ad` ile başlayan mesajı yalnız o ajana gider; diğerleri görmez, uyanmaz
+  (sen hepsini görürsün). Mesajın içinde bir ajanı @ ile anmak iş devridir: anılan ajan çağrı sınırı dolmuş olsa da
+  hemen bir kez söz alır.
+- **Süreç koruması:** ajanların `pkill` ve `killall` komutları yalnız odadaki ajanların başlattığı süreçlere dokunur;
+  senin açtığın bir pencere eşleşirse hiçbiri kapatılmaz.
 - **Dosya değişikliği bildirimi:** Üretim'de her turdan sonra projede neyin değiştiği ve kimin değiştirdiği odaya
   düşer.
 - **Medya:** ajanların ürettiği resim, video, SVG, PDF ve HTML sohbette önizlenir; bağlantılar ve dosya yolları
@@ -35,7 +47,8 @@ hangi modda olduklarını ve ekranın neler gösterebildiğini bilir.
   anılan ajanlar o turu alır.
 - **Kota:** her ajanın 5 saatlik ve haftalık kalan kotası kartında görünür; CLI'ın kendi raporundan, model
   çağırmadan okunur. Bir ajanın kotası dolunca odaya yazılır, diğerleri de görür.
-- **Güvenlik ağları:** mesaj başına çağrı sınırı, takılan Antigravity komutları için zaman aşımı ve uyandırma,
+- **Güvenlik ağları:** elle modda mesaj başına çağrı sınırı (dolunca "Devam et"; Oto'da sınır yoktur, onay ve
+  tekrar mesajları kimseyi uyandırmadığı için sohbet kendiliğinden durur), takılan Antigravity komutları için zaman aşımı ve uyandırma,
   her şeyin olay kaydı (`~/.local/share/sacmalik/loglar/`).
 - **Resim ve dosya gönderme:** 📎 ile seç, Ctrl+V ile yapıştır ya da sürükle bırak; ajanlar eki okuyabilir.
 - **Durum paneli:** sağda açılıp kapanan panel (Ctrl+B): her ajanın ne yaptığı, ne kadardır çalıştığı, kalan kotası;
