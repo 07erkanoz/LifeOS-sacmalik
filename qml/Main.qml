@@ -247,9 +247,9 @@ ApplicationWindow {
                          time: time || Qt.formatTime(new Date(), "HH:mm") }
             if (pending) msgs.append(item)
             else msgs.insert(firstPending(), item)
-            Qt.callLater(chat.positionViewAtEnd)
+            chat.toEnd(false)
         }
-        function onRoomReset() { msgs.clear() }
+        function onRoomReset() { msgs.clear(); chat.follow = true; chat.unread = false }
         function onMessagePinned(id, on) {
             var i = indexOfId(id); if (i < 0) return
             msgs.setProperty(i, "pinned", on)
@@ -261,7 +261,7 @@ ApplicationWindow {
         function onMessageMedia(id, paths) {
             var i = indexOfId(id); if (i < 0) return
             msgs.setProperty(i, "media", paths)
-            if (i === msgs.count - 1 || chat.atYEnd) Qt.callLater(chat.positionViewAtEnd)
+            chat.toEnd(false)
         }
         function onMessageSealed(id, on) {
             var i = indexOfId(id); if (i < 0) return
@@ -278,7 +278,7 @@ ApplicationWindow {
         function onMessageUpdated(id, text) {
             var i = indexOfId(id); if (i < 0) return
             msgs.setProperty(i, "body", text)
-            if (chat.atYEnd || i === msgs.count - 1) Qt.callLater(chat.positionViewAtEnd)
+            chat.toEnd(false)
         }
         function onMessageDone(id, ok, secs) {
             var i = indexOfId(id); if (i < 0) return
@@ -291,7 +291,7 @@ ApplicationWindow {
             var t = firstPending()
             if (i < t - 1) msgs.move(i, t - 1, 1)
             else if (i > t) msgs.move(i, t, 1)
-            Qt.callLater(chat.positionViewAtEnd)
+            chat.toEnd(false)
         }
         function onStatusText(t) { win.status = t }
         function onPicked(mode, paths) {
@@ -788,14 +788,36 @@ ApplicationWindow {
                     spacing: 0
             ListView {
                 id: chat
+                objectName: "chatList"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 clip: true
                 model: msgs
                 spacing: 8
                 topMargin: 24; bottomMargin: 12
+                // En alttaysan yeni mesajlar seni de aşağı taşır; yukarı çıktıysan yerinde kalırsın (20.11.2026).
+                // Yukarıdayken gelen mesaj için "↓ Yeni mesajlar" düğmesi çıkar; mesaj gönderince en alta inilir.
+                property bool follow: true
+                property bool unread: false
+                property bool jumping: false
+                readonly property real fromEnd: gap()
+                function gap() { return originY + contentHeight + bottomMargin - height - contentY }   // en alta uzaklık
+                onContentYChanged: {
+                    if (jumping) return
+                    var g = gap()
+                    if (g < 4) { follow = true; unread = false }                       // en alta varıldı
+                    else if (moving || dragging || flicking || vBar.pressed) follow = g < 60
+                }
+                onMovementEnded: if (!jumping) { follow = gap() < 60; if (follow) unread = false }
+                function toEnd(force) {
+                    if (!force && !follow) { unread = true; return }
+                    follow = true; unread = false
+                    Qt.callLater(function() { chat.jumping = true; chat.positionViewAtEnd(); chat.jumping = false })
+                }
+
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar {
+                    id: vBar
                     policy: ScrollBar.AsNeeded
                     contentItem: Rectangle { implicitWidth: 6; radius: 3; color: Theme.line; opacity: parent.active ? 1 : 0.5 }
                 }
@@ -803,6 +825,20 @@ ApplicationWindow {
                     width: chat.width
                     isUser: model.key === "user"
                     showHeader: index === 0 || msgs.get(index - 1).key !== model.key
+                }
+
+                // yukarıdayken yeni mesaj geldi: en alta in
+                Rectangle {
+                    parent: chat          // içerikle birlikte kaymasın: listenin kendisine bağlı
+                    visible: !chat.follow && (chat.unread || room.busy) && msgs.count > 0
+                    z: 20
+                    anchors.horizontalCenter: chat.horizontalCenter
+                    anchors.bottom: chat.bottom; anchors.bottomMargin: 10
+                    implicitWidth: newTxt.implicitWidth + 28; implicitHeight: 32; radius: 16
+                    color: newMa.containsMouse ? Theme.userHi : Theme.user
+                    Text { id: newTxt; anchors.centerIn: parent; color: "white"; font.pixelSize: Theme.fs(12); font.weight: Font.DemiBold
+                           text: chat.unread ? "↓  Yeni mesajlar" : "↓  En alta in" }
+                    MouseArea { id: newMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: chat.toEnd(true) }
                 }
 
                 // boş durum
@@ -1092,6 +1128,7 @@ ApplicationWindow {
                             onClicked: {
                                 if (!ready) return
                                 room.sendWith(input.text, win.attachments)
+                                chat.toEnd(true)
                                 input.text = ""
                                 win.attachments = []
                                 var p = sendBtn.mapToItem(win.contentItem, sendBtn.width / 2, sendBtn.height / 2)
